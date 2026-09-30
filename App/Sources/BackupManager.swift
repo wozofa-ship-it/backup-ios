@@ -7,6 +7,30 @@ struct BackupRecord: Codable, Identifiable {
     var date: Date
     var sourceName: String
     var destName: String
+    // v9.4: 记录类型，"backup"=备份，"restore"=恢复。老记录无此字段，解码时默认 backup
+    var kind: String = "backup"
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, date, sourceName, destName, kind
+    }
+
+    init(name: String, date: Date, sourceName: String, destName: String, kind: String = "backup") {
+        self.name = name
+        self.date = date
+        self.sourceName = sourceName
+        self.destName = destName
+        self.kind = kind
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decode(String.self, forKey: .name)
+        date = try c.decode(Date.self, forKey: .date)
+        sourceName = try c.decode(String.self, forKey: .sourceName)
+        destName = try c.decode(String.self, forKey: .destName)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "backup"
+    }
 }
 
 class BackupManager: ObservableObject {
@@ -37,7 +61,16 @@ class BackupManager: ObservableObject {
     }
 
     func addRecord(name: String, sourceName: String, destName: String) {
-        records.insert(BackupRecord(name: name, date: Date(), sourceName: sourceName, destName: destName), at: 0)
+        records.insert(BackupRecord(name: name, date: Date(), sourceName: sourceName, destName: destName, kind: "backup"), at: 0)
+        if records.count > 50 {
+            records = Array(records.prefix(50))
+        }
+        saveRecords()
+    }
+
+    // v9.4: 恢复记录（解压 zip 到指定文件夹）
+    func addRestoreRecord(zipName: String, destName: String) {
+        records.insert(BackupRecord(name: zipName, date: Date(), sourceName: zipName, destName: destName, kind: "restore"), at: 0)
         if records.count > 50 {
             records = Array(records.prefix(50))
         }

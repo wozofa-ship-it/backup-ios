@@ -248,11 +248,20 @@ struct ContentView: View {
                     } else {
                         ForEach(manager.records) { r in
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(r.name).font(.headline)
+                                HStack(spacing: 6) {
+                                    // v9.4: 备份/恢复标识
+                                    Text(r.kind == "restore" ? "恢复" : "备份")
+                                        .font(.caption2)
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(r.kind == "restore" ? Color.green.opacity(0.2) : Color.blue.opacity(0.2))
+                                        .cornerRadius(4)
+                                    Text(r.name).font(.headline)
+                                }
                                 Text("\(formatDate(r.date)) · \(r.sourceName) → \(r.destName)")
                                     .font(.caption).foregroundColor(.secondary)
                                 // v9.0: 显示备份文件是否存在、大小，方便查看
-                                if let url = backupZips.first(where: { $0.lastPathComponent == r.name }) {
+                                // v9.4: 恢复记录不查文件（zip 可能已删），只给备份记录查
+                                if r.kind == "backup", let url = backupZips.first(where: { $0.lastPathComponent == r.name }) {
                                     Text("✅ 文件存在 · \(fileSizeString(url))")
                                         .font(.caption).foregroundColor(.green)
                                     Button("恢复此备份") {
@@ -260,7 +269,7 @@ struct ContentView: View {
                                         showUnzipDestPicker = true
                                     }
                                     .font(.footnote)
-                                } else {
+                                } else if r.kind == "backup" {
                                     Text("⚠️ 备份文件已不在（可能已删除或移动）")
                                         .font(.caption).foregroundColor(.orange)
                                 }
@@ -412,8 +421,11 @@ struct ContentView: View {
                     manager.isWorking = false
                     manager.progress = 1
                     manager.status = "解压完成"
+                    // v9.4: 恢复也要存记录
+                    manager.addRestoreRecord(zipName: zip.lastPathComponent, destName: dest.lastPathComponent)
                     alertText = "已解压到「\(dest.lastPathComponent)」"
                     showAlert = true
+                    refresh()
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -443,6 +455,14 @@ struct UnzipDestView: View {
     let onPick: (URL) -> Void
     let onCancel: () -> Void
     @State private var newFolderName = ""
+    // v9.4: 选目标后先确认，让"自己选择"更明确，不直接解压
+    @State private var confirmDest: URL?
+    @State private var showConfirm = false
+
+    func choose(_ dest: URL) {
+        confirmDest = dest
+        showConfirm = true
+    }
 
     var body: some View {
         NavigationView {
@@ -462,13 +482,13 @@ struct UnzipDestView: View {
                             let dest = documentsDir().appendingPathComponent(name, isDirectory: true)
                             try? FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
                             newFolderName = ""
-                            onPick(dest)
+                            choose(dest)
                         }
                     }
                 }
                 Section(header: Text("解压「\(zipURL?.lastPathComponent ?? "")」到…")) {
                     Button {
-                        onPick(documentsDir())
+                        choose(documentsDir())
                     } label: {
                         HStack {
                             Image(systemName: "folder.fill").foregroundColor(.blue)
@@ -477,7 +497,7 @@ struct UnzipDestView: View {
                         }
                     }
                     ForEach(folders, id: \.path) { url in
-                        Button { onPick(url) } label: {
+                        Button { choose(url) } label: {
                             HStack {
                                 Image(systemName: "folder.fill").foregroundColor(.blue)
                                 Text(url.lastPathComponent).foregroundColor(.primary)
@@ -489,6 +509,12 @@ struct UnzipDestView: View {
             }
             .navigationTitle("选择解压位置")
             .navigationBarItems(trailing: Button("取消") { onCancel() })
+            .alert("解压到这个文件夹？", isPresented: $showConfirm, presenting: confirmDest) { dest in
+                Button("取消", role: .cancel) {}
+                Button("开始解压") { onPick(dest) }
+            } message: { dest in
+                Text("将「\(zipURL?.lastPathComponent ?? "")」解压到「\(dest.lastPathComponent)」")
+            }
         }
     }
 }
