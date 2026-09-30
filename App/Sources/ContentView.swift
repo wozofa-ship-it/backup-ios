@@ -15,6 +15,38 @@ func documentsDir() -> URL {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 }
 
+// v7.0：分享扩展用的 App Group
+let shareGroupID = "group.com.quseqi.backup.shared"
+
+/// v7.0：把分享扩展导入的项目搬到 App 内。文件夹进 Documents（可备份），zip 进"备份"目录（可恢复）
+/// 返回成功导入的数量
+func importFromShareExtension(backupRoot: URL) -> Int {
+    let fm = FileManager.default
+    guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: shareGroupID) else { return 0 }
+    let incoming = container.appendingPathComponent("Incoming", isDirectory: true)
+    guard let items = try? fm.contentsOfDirectory(at: incoming, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]),
+          !items.isEmpty else { return 0 }
+    let docs = documentsDir()
+    var count = 0
+    for src in items {
+        // zip 包直接进备份目录，其他进 Documents
+        let targetDir = src.pathExtension.lowercased() == "zip" ? backupRoot : docs
+        var dest = targetDir.appendingPathComponent(src.lastPathComponent)
+        var n = 2
+        while fm.fileExists(atPath: dest.path) {
+            let base = src.deletingPathExtension().lastPathComponent
+            let ext = src.pathExtension
+            let name = ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)"
+            dest = targetDir.appendingPathComponent(name)
+            n += 1
+        }
+        if (try? fm.moveItem(at: src, to: dest)) != nil {
+            count += 1
+        }
+    }
+    return count
+}
+
 func listFolders(in dir: URL, excluding: Set<String> = []) -> [URL] {
     let fm = FileManager.default
     guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
@@ -231,8 +263,14 @@ struct ContentView: View {
     // MARK: - 逻辑
 
     func refresh() {
+        // v7.0：先把分享扩展导入的内容搬进来
+        let imported = importFromShareExtension(backupRoot: manager.localBackupRoot())
         sourceFolders = listFolders(in: documentsDir(), excluding: ["备份"])
         backupZips = listZips(in: manager.localBackupRoot())
+        if imported > 0 {
+            alertText = "已从分享导入 \(imported) 个项目，可直接备份/恢复"
+            showAlert = true
+        }
     }
 
     func checkPasteboard() {
