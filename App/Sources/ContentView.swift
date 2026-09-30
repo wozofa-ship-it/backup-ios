@@ -104,8 +104,6 @@ struct ContentView: View {
     @State private var backupZips: [URL] = []
     @State private var selectedZip: URL?
     @State private var showUnzipDestPicker = false
-    // v9.6: 导入 zip 引导弹窗
-    @State private var showImportGuide = false
 
     @State private var alertText = ""
     @State private var showAlert = false
@@ -137,22 +135,16 @@ struct ContentView: View {
                 }
 
                 // MARK: 备份（压缩成 zip）
+                // v10: 只留核心流程
                 Section(header: Text("备份")) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("① 在“文件”App 拷贝文件夹 → 粘贴到“备份助手”")
-                        Text("② 回到这里，点文件夹一键压缩成 .zip")
-                        Text("③ 点“分享”存到 iCloud 云盘")
-                    }
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-
-                    Button("去“文件”App 拷贝文件夹") { openFilesApp() }
-                        .font(.headline)
-
-                    TextField("备份名称（可改）", text: $backupName)
+                    Text("把要备份的文件夹拷进“备份助手”文件夹（在文件 App 里操作），回来点下面开始压缩。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    Button("去文件 App") { openFilesApp() }
+                        .font(.footnote)
 
                     if sourceFolders.isEmpty {
-                        Text("还没有文件夹：去“文件”App 粘贴进来，回来自动刷新")
+                        Text("还没有文件夹：去文件 App 把文件夹拷进“备份助手”，回来自动出现")
                             .font(.footnote)
                             .foregroundColor(.secondary)
                     } else {
@@ -193,27 +185,15 @@ struct ContentView: View {
                 }
 
                 // MARK: 恢复（解压 zip）
-                // v9.3: 任何来源的 zip 都能恢复：去文件 App 把 zip 拷进"备份助手"文件夹，回来自动出现
+                // v10: 只留一句话说明，不再放导入按钮（按钮跳文件App后用户直接在那点zip，系统就地解压）
                 Section(header: Text("恢复")) {
-                    Text("选一个 .zip，再选解压到哪个文件夹。任何来源的 zip 都行。")
+                    Text("把 zip 放进“备份助手”文件夹（在文件 App 里复制），回到这里点它，再选解压到哪个文件夹。")
                         .font(.footnote)
-                        .foregroundColor(.secondary)
-
-                    // v9.6: 先弹窗讲清两步，避免用户在文件 App 里直接点 zip（系统会就地解压无选择）
-                    Button("＋ 从“文件”App 导入 zip") { showImportGuide = true }
-                        .font(.footnote)
-                        .alert("导入 zip 两步走", isPresented: $showImportGuide) {
-                            Button("去文件 App 放 zip") { openFilesApp() }
-                            Button("取消", role: .cancel) {}
-                        } message: {
-                            Text("① 在文件 App 把 zip 拷进“备份助手”文件夹\n② 回到备份助手 App，在下面点 zip 选文件夹解压\n\n⚠️ 别在文件 App 里直接点 zip，系统会就地解压不让你选")
-                        }
-                    Text("在文件 App 里把任意 zip 拷贝到“备份助手”文件夹，回来这里自动出现。")
-                        .font(.caption)
                         .foregroundColor(.secondary)
 
                     if backupZips.isEmpty {
-                        Text("暂无 zip 备份").font(.footnote).foregroundColor(.secondary)
+                        Text("暂无 zip：先去文件 App 把 zip 拷进“备份助手”文件夹")
+                            .font(.footnote).foregroundColor(.secondary)
                     } else {
                         ForEach(backupZips, id: \.path) { url in
                             Button {
@@ -285,16 +265,9 @@ struct ContentView: View {
                     }
                 }
 
-                // v9.2: 系统选择器在此设备上 4 种写法均无响应（环境问题），改用分享方式导入
-                Section(header: Text("导入文件夹")) {
-                    Text("系统选择器在此设备上点“打开”无响应。改用：在“文件”App 长按文件夹 → 分享 → “备份助手”，压缩完存到“备份助手”文件夹，回来这里就能看到。")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                    Button("去“文件”App 分享文件夹") { openFilesApp() }
-                }
-                // v9.6: 版本号，报问题时对照
+                // v10: 版本号
                 Section {
-                    Text("版本 v9.6").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v10").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
