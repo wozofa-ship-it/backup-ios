@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 func defaultBackupName(for folderName: String? = nil) -> String {
     let f = DateFormatter()
@@ -81,28 +80,8 @@ func topVC() -> UIViewController? {
     return vc
 }
 
-// v9.1: 系统选择器诊断。排查结论：
-// - v3.0 用 allowsMultipleSelection=true，撞上 iOS 已知 bug（多选模式下进文件夹点"打开"无响应，delegate 不触发）
-// - v3.1 改单选但用了独立 UIWindow 弹出，UIDocumentPickerViewController 是远程视图，自定义窗口可能破坏其触摸/展示
-// - 从没试过"单选 + 主窗口常规弹出"，这次单独测试验证
-class TestPickerDelegate: NSObject, UIDocumentPickerDelegate {
-    static let shared = TestPickerDelegate()
-    var onResult: ((Bool, String) -> Void)?
-
-    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        let name = urls.first?.lastPathComponent ?? "?"
-        let path = urls.first?.path ?? ""
-        controller.dismiss(animated: true) { [weak self] in
-            DispatchQueue.main.async { self?.onResult?(true, "\(name)||\(path)") }
-        }
-    }
-
-    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-        controller.dismiss(animated: true) { [weak self] in
-            DispatchQueue.main.async { self?.onResult?(false, "用户取消了选择") }
-        }
-    }
-}
+// v9.2: 系统选择器已确认在此设备上不可用（v1.5/v3.0/v3.1/v9.1 四种写法：fileImporter、多选、单选+独立窗口、单选+常规弹出，
+// 点"打开"均无响应，delegate 不触发）。改走"文件App分享到备份助手"扩展导入，不再保留诊断代码。
 
 // 检查剪贴板是否有文件 URL（iOS 不允许直接读取，只能检测到）
 func pasteboardHasFiles() -> Bool {
@@ -134,9 +113,6 @@ struct ContentView: View {
     // v9.0: 备份完成弹窗（保存位置+分享+清理三合一）
     @State private var showBackupDone = false
     @State private var backupDoneText = ""
-    // v9.1: 系统选择器诊断测试
-    @State private var testPickerStatus = ""
-    @State private var testPickedPath = ""
 
 
     var body: some View {
@@ -254,9 +230,14 @@ struct ContentView: View {
                 }
 
                 // MARK: 记录
+                // v9.2: 正式记录 + 磁盘上无记录的 zip 都列出来，每条可直接恢复
                 Section(header: Text("备份记录")) {
-                    if manager.records.isEmpty {
-                        Text("暂无记录").foregroundColor(.secondary)
+                    let orphanZips = backupZips.filter { zip in
+                        !manager.records.contains { $0.name == zip.lastPathComponent }
+                    }
+                    if manager.records.isEmpty && orphanZips.isEmpty {
+                        Text("暂无记录：完成一次备份后这里会显示")
+                            .font(.footnote).foregroundColor(.secondary)
                     } else {
                         ForEach(manager.records) { r in
                             VStack(alignment: .leading, spacing: 2) {
@@ -265,8 +246,13 @@ struct ContentView: View {
                                     .font(.caption).foregroundColor(.secondary)
                                 // v9.0: 显示备份文件是否存在、大小，方便查看
                                 if let url = backupZips.first(where: { $0.lastPathComponent == r.name }) {
-                                    Text("✅ 文件存在 · \(fileSizeString(url)) · 去“恢复”区可解压")
+                                    Text("✅ 文件存在 · \(fileSizeString(url))")
                                         .font(.caption).foregroundColor(.green)
+                                    Button("恢复此备份") {
+                                        selectedZip = url
+                                        showUnzipDestPicker = true
+                                    }
+                                    .font(.footnote)
                                 } else {
                                     Text("⚠️ 备份文件已不在（可能已删除或移动）")
                                         .font(.caption).foregroundColor(.orange)
@@ -274,21 +260,28 @@ struct ContentView: View {
                             }
                         }
                         .onDelete(perform: manager.deleteRecord)
+                        // v9.2: 磁盘上有但没正式记录的 zip（分享扩展/手动存入的）
+                        ForEach(orphanZips, id: \.path) { url in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(url.lastPathComponent).font(.headline)
+                                Text("\(fileSizeString(url)) · 通过分享/手动存入 · \(zipLocation(url))")
+                                    .font(.caption).foregroundColor(.secondary)
+                                Button("恢复此备份") {
+                                    selectedZip = url
+                                    showUnzipDestPicker = true
+                                }
+                                .font(.footnote)
+                            }
+                        }
                     }
                 }
 
-                // v9.1: 系统选择器诊断测试
-                Section(header: Text("诊断")) {
-                    Text("测试系统文件夹选择器能不能用（单选模式）。点按钮 → 进任意文件夹 → 点右上角“打开”，看下面显示什么。")
+                // v9.2: 系统选择器在此设备上 4 种写法均无响应（环境问题），改用分享方式导入
+                Section(header: Text("导入文件夹")) {
+                    Text("系统选择器在此设备上点“打开”无响应。改用：在“文件”App 长按文件夹 → 分享 → “备份助手”，压缩完存到“备份助手”文件夹，回来这里就能看到。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
-                    Button("🧪 测试系统文件夹选择器") { testSystemPicker() }
-                    if !testPickerStatus.isEmpty {
-                        Text(testPickerStatus).font(.footnote)
-                        if !testPickedPath.isEmpty {
-                            Text(testPickedPath).font(.caption).foregroundColor(.secondary)
-                        }
-                    }
+                    Button("去“文件”App 分享文件夹") { openFilesApp() }
                 }
             }
             .navigationTitle("备份助手")
@@ -361,26 +354,7 @@ struct ContentView: View {
         }
     }
 
-    // v9.1: 系统文件夹选择器诊断测试（单选+主窗口常规弹出）
-    func testSystemPicker() {
-        let vc = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder])
-        // 注意：故意不设 allowsMultipleSelection，单选模式，避开已知多选 bug
-        TestPickerDelegate.shared.onResult = { ok, result in
-            if ok {
-                let parts = result.components(separatedBy: "||")
-                self.testPickerStatus = "✅ 选到了：\(parts[0])"
-                self.testPickedPath = parts.count > 1 ? parts[1] : ""
-            } else {
-                self.testPickerStatus = "🚫 \(result)"
-                self.testPickedPath = ""
-            }
-            TestPickerDelegate.shared.onResult = nil
-        }
-        vc.delegate = TestPickerDelegate.shared
-        testPickerStatus = "选择器已弹出：进文件夹 → 点右上角“打开”…"
-        testPickedPath = ""
-        topVC()?.present(vc, animated: true)
-    }
+    // v9.2: 系统选择器诊断函数已删除（确认不可用），改走分享扩展导入
 
     func startZipBackup(from src: URL) {
         let name = backupName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -467,17 +441,22 @@ struct UnzipDestView: View {
         NavigationView {
             List {
                 // v9.0: 可新建文件夹作为解压目标
+                // v9.2: 去掉禁用逻辑，空名自动生成，按钮永远可点
                 Section(header: Text("新建文件夹")) {
                     HStack {
-                        TextField("输入新文件夹名", text: $newFolderName)
+                        TextField("输入新文件夹名（可空，自动生成）", text: $newFolderName)
                         Button("创建并解压") {
-                            let name = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            var name = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if name.isEmpty {
+                                let f = DateFormatter()
+                                f.dateFormat = "MMdd-HHmm"
+                                name = "恢复-" + f.string(from: Date())
+                            }
                             let dest = documentsDir().appendingPathComponent(name, isDirectory: true)
                             try? FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
                             newFolderName = ""
                             onPick(dest)
                         }
-                        .disabled(newFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
                 Section(header: Text("解压「\(zipURL?.lastPathComponent ?? "")」到…")) {
