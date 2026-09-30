@@ -12,37 +12,64 @@ func defaultBackupName() -> String {
     return "备份-" + f.string(from: Date())
 }
 
-/// 多选文件夹选择器代理：取第一个选中的 URL，主动关闭
-class MultiFolderPickerCoordinator: NSObject, UIDocumentPickerDelegate {
-    var onPick: ([URL]) -> Void
-    var onCancel: () -> Void
+/// 文件夹选择器：用独立 UIWindow 弹出，避免主窗口拦截选择器的触摸事件
+/// （UIDocumentPickerViewController 是远程视图，触摸需直达其远程 UI）
+class FolderPickerPresenter: NSObject, UIDocumentPickerDelegate {
+    static let shared = FolderPickerPresenter()
 
-    init(onPick: @escaping ([URL]) -> Void, onCancel: @escaping () -> Void = {}) {
+    private var window: UIWindow?
+    private var onPick: ((URL) -> Void)?
+    private var onCancel: (() -> Void)?
+
+    func present(onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void = {}) {
         self.onPick = onPick
         self.onCancel = onCancel
+
+        let vc = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder])
+        vc.delegate = self
+
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else {
+            onCancel()
+            return
+        }
+
+        let window = UIWindow(windowScene: scene)
+        window.windowLevel = UIWindow.Level.alert + 1
+        let rootVC = UIViewController()
+        rootVC.view.backgroundColor = .clear
+        window.rootViewController = rootVC
+        window.makeKeyAndVisible()
+        self.window = window
+
+        rootVC.present(vc, animated: true)
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        controller.dismiss(animated: true)
-        let urls = urls
-        DispatchQueue.main.async { self.onPick(urls) }
+        let cb = onPick
+        let url = urls.first
+        controller.dismiss(animated: true) { [weak self] in
+            self?.cleanup()
+            if let url = url {
+                DispatchQueue.main.async { cb?(url) }
+            }
+        }
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-        controller.dismiss(animated: true)
-        DispatchQueue.main.async { self.onCancel() }
+        let cb = onCancel
+        controller.dismiss(animated: true) { [weak self] in
+            self?.cleanup()
+            DispatchQueue.main.async { cb?() }
+        }
     }
-}
 
-func topVC() -> UIViewController? {
-    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-    let window = scenes.flatMap { $0.windows }.first { $0.isKeyWindow }
-        ?? scenes.flatMap { $0.windows }.first
-    var vc = window?.rootViewController
-    while let presented = vc?.presentedViewController {
-        vc = presented
+    private func cleanup() {
+        window?.isHidden = true
+        window?.rootViewController = nil
+        window = nil
+        onPick = nil
+        onCancel = nil
     }
-    return vc
 }
 
 struct ContentView: View {
@@ -54,7 +81,6 @@ struct ContentView: View {
     @State private var restoreSource: URL?
     @State private var restoreDest: URL?
 
-    @State private var pickerCoordinator: MultiFolderPickerCoordinator?
     @State private var debugStatus = ""
 
     @State private var alertText = ""
@@ -71,7 +97,7 @@ struct ContentView: View {
         NavigationView {
             List {
                 Section(header: Text("备份")) {
-                    Text("点“选择”后，在文件列表里点选文件夹（打勾），再点右上角确认。")
+                    Text("点“选择”→ 进入要备份的文件夹 → 点右上角“打开”即选中它。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                     TextField("备份名称", text: $backupName)
@@ -103,7 +129,7 @@ struct ContentView: View {
                 }
 
                 Section(header: Text("恢复")) {
-                    Text("点“选择”后，在文件列表里点选文件夹（打勾），再点右上角确认。")
+                    Text("点“选择”→ 进入文件夹 → 点右上角“打开”即选中它。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                     folderRow(title: "选择备份文件夹", url: restoreSource) {
@@ -159,30 +185,19 @@ struct ContentView: View {
         return f.string(from: d)
     }
 
-    // MARK: - 多选文件夹选择器
+    // MARK: - 选择器（独立窗口弹出）
 
     func pick(_ target: PickerTarget) {
-        let vc = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder])
-        vc.allowsMultipleSelection = true
-        let coordinator = MultiFolderPickerCoordinator(
-            onPick: { urls in
-                self.pickerCoordinator = nil
-                if let url = urls.first {
-                    self.debugStatus = "已选择：\(url.lastPathComponent)"
-                    self.assignPicked(url, target: target)
-                } else {
-                    self.debugStatus = "没有选中任何文件夹"
-                }
+        debugStatus = "选择器已弹出…"
+        FolderPickerPresenter.shared.present(
+            onPick: { url in
+                self.debugStatus = "已选择：\(url.lastPathComponent)"
+                self.assignPicked(url, target: target)
             },
             onCancel: {
-                self.pickerCoordinator = nil
                 self.debugStatus = "已取消选择"
             }
         )
-        vc.delegate = coordinator
-        pickerCoordinator = coordinator
-        debugStatus = "选择器已弹出，请点选文件夹…"
-        topVC()?.present(vc, animated: true)
     }
 
     func assignPicked(_ url: URL, target: PickerTarget) {
