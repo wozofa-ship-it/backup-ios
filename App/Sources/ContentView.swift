@@ -1,5 +1,10 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import UIKit
+
+enum PickerTarget {
+    case backupSource, backupDest, restoreSource, restoreDest
+}
 
 func defaultBackupName() -> String {
     let f = DateFormatter()
@@ -7,88 +12,85 @@ func defaultBackupName() -> String {
     return "备份-" + f.string(from: Date())
 }
 
-func documentsDir() -> URL {
-    FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+/// 多选文件夹选择器代理：取第一个选中的 URL，主动关闭
+class MultiFolderPickerCoordinator: NSObject, UIDocumentPickerDelegate {
+    var onPick: ([URL]) -> Void
+    var onCancel: () -> Void
+
+    init(onPick: @escaping ([URL]) -> Void, onCancel: @escaping () -> Void = {}) {
+        self.onPick = onPick
+        self.onCancel = onCancel
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        controller.dismiss(animated: true)
+        let urls = urls
+        DispatchQueue.main.async { self.onPick(urls) }
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        controller.dismiss(animated: true)
+        DispatchQueue.main.async { self.onCancel() }
+    }
 }
 
-/// 列出 dir 下的文件夹（排除 reserved）
-func listFolders(in dir: URL, excluding: Set<String> = []) -> [URL] {
-    let fm = FileManager.default
-    guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
-        return []
+func topVC() -> UIViewController? {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let window = scenes.flatMap { $0.windows }.first { $0.isKeyWindow }
+        ?? scenes.flatMap { $0.windows }.first
+    var vc = window?.rootViewController
+    while let presented = vc?.presentedViewController {
+        vc = presented
     }
-    return items.filter { url in
-        var isDir: ObjCBool = false
-        return fm.fileExists(atPath: url.path, isDirectory: &isDir)
-            && isDir.boolValue
-            && !excluding.contains(url.lastPathComponent)
-    }.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+    return vc
 }
 
 struct ContentView: View {
     @StateObject private var manager = BackupManager()
 
-    // 备份
     @State private var backupName: String = defaultBackupName()
-    @State private var sourceFolders: [URL] = []
-    @State private var pendingSource: URL?
-    @State private var showBackupConfirm = false
-    @State private var lastBackupURL: URL?
+    @State private var backupSource: URL?
+    @State private var backupDest: URL?
+    @State private var restoreSource: URL?
+    @State private var restoreDest: URL?
 
-    // 恢复
-    @State private var backups: [URL] = []
-    @State private var selectedBackup: URL?
-    @State private var restoreName: String = ""
+    @State private var pickerCoordinator: MultiFolderPickerCoordinator?
+    @State private var debugStatus = ""
 
     @State private var alertText = ""
     @State private var showAlert = false
 
+    var canBackup: Bool {
+        !manager.isWorking
+            && backupSource != nil
+            && backupDest != nil
+            && !backupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         NavigationView {
             List {
-                // MARK: 备份
                 Section(header: Text("备份")) {
-                    Text("① 在“文件”App 里把要备份的文件夹拷到“我的 iPhone → 备份助手”\n② 在下面点选文件夹 → 确认备份")
+                    Text("点“选择”后，在文件列表里点选文件夹（打勾），再点右上角确认。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
-
                     TextField("备份名称", text: $backupName)
 
-                    if sourceFolders.isEmpty {
-                        Text("暂无可备份的文件夹，点“刷新”试试")
+                    folderRow(title: "要备份的文件夹", url: backupSource) {
+                        pick(.backupSource)
+                    }
+                    folderRow(title: "备份到哪里", url: backupDest) {
+                        pick(.backupDest)
+                    }
+
+                    Button("开始备份") { startBackup() }
+                        .disabled(!canBackup)
+
+                    if !debugStatus.isEmpty {
+                        Text(debugStatus)
                             .font(.footnote)
                             .foregroundColor(.secondary)
-                    } else {
-                        ForEach(sourceFolders, id: \.path) { url in
-                            Button {
-                                pendingSource = url
-                                showBackupConfirm = true
-                            } label: {
-                                HStack {
-                                    Image(systemName: "folder.fill")
-                                        .foregroundColor(.blue)
-                                    Text(url.lastPathComponent)
-                                        .foregroundColor(.primary)
-                                    Spacer()
-                                }
-                            }
-                        }
                     }
-
-                    Button("刷新列表") { refresh() }
-                        .font(.footnote)
-
-                    if let done = lastBackupURL {
-                        Button("分享备份（可存到 iCloud 云盘）") {
-                            shareURL(done)
-                        }
-                    }
-                }
-                .alert("是否备份这个文件夹？", isPresented: $showBackupConfirm, presenting: pendingSource) { url in
-                    Button("取消", role: .cancel) {}
-                    Button("开始备份") { startBackup(from: url) }
-                } message: { url in
-                    Text("将把「\(url.lastPathComponent)」备份到本机。")
                 }
 
                 if manager.isWorking || !manager.status.isEmpty {
@@ -100,45 +102,20 @@ struct ContentView: View {
                     }
                 }
 
-                // MARK: 恢复
                 Section(header: Text("恢复")) {
-                    Text("从下面的备份里选一个，输入新文件夹名，恢复到“备份助手”内，可再去“文件”App 里移动。")
+                    Text("点“选择”后，在文件列表里点选文件夹（打勾），再点右上角确认。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
-
-                    if backups.isEmpty {
-                        Text("暂无备份")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(backups, id: \.path) { url in
-                            Button {
-                                selectedBackup = url
-                                if restoreName.isEmpty {
-                                    restoreName = url.lastPathComponent + "-恢复"
-                                }
-                            } label: {
-                                HStack {
-                                    Image(systemName: selectedBackup?.path == url.path ? "checkmark.circle.fill" : "circle")
-                                        .foregroundColor(.blue)
-                                    Text(url.lastPathComponent)
-                                        .foregroundColor(.primary)
-                                    Spacer()
-                                }
-                            }
-                        }
+                    folderRow(title: "选择备份文件夹", url: restoreSource) {
+                        pick(.restoreSource)
                     }
-
-                    TextField("恢复成新文件夹名", text: $restoreName)
-
+                    folderRow(title: "恢复到哪个目录", url: restoreDest) {
+                        pick(.restoreDest)
+                    }
                     Button("开始恢复") { startRestore() }
-                        .disabled(manager.isWorking || selectedBackup == nil || restoreName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                    Button("刷新列表") { refresh() }
-                        .font(.footnote)
+                        .disabled(manager.isWorking || restoreSource == nil || restoreDest == nil)
                 }
 
-                // MARK: 记录
                 Section(header: Text("备份记录")) {
                     if manager.records.isEmpty {
                         Text("暂无记录").foregroundColor(.secondary)
@@ -156,7 +133,6 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("备份助手")
-            .onAppear { refresh() }
             .alert("提示", isPresented: $showAlert) {
                 Button("好") {}
             } message: {
@@ -165,11 +141,16 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - 逻辑
-
-    func refresh() {
-        sourceFolders = listFolders(in: documentsDir(), excluding: ["备份"])
-        backups = listFolders(in: manager.localBackupRoot())
+    func folderRow(title: String, url: URL?, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(url?.lastPathComponent ?? "选择")
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+        }
     }
 
     func formatDate(_ d: Date) -> String {
@@ -178,20 +159,52 @@ struct ContentView: View {
         return f.string(from: d)
     }
 
-    func startBackup(from src: URL) {
-        let name = backupName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else {
-            alertText = "请先输入备份名称"
-            showAlert = true
-            return
+    // MARK: - 多选文件夹选择器
+
+    func pick(_ target: PickerTarget) {
+        let vc = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder])
+        vc.allowsMultipleSelection = true
+        let coordinator = MultiFolderPickerCoordinator(
+            onPick: { urls in
+                self.pickerCoordinator = nil
+                if let url = urls.first {
+                    self.debugStatus = "已选择：\(url.lastPathComponent)"
+                    self.assignPicked(url, target: target)
+                } else {
+                    self.debugStatus = "没有选中任何文件夹"
+                }
+            },
+            onCancel: {
+                self.pickerCoordinator = nil
+                self.debugStatus = "已取消选择"
+            }
+        )
+        vc.delegate = coordinator
+        pickerCoordinator = coordinator
+        debugStatus = "选择器已弹出，请点选文件夹…"
+        topVC()?.present(vc, animated: true)
+    }
+
+    func assignPicked(_ url: URL, target: PickerTarget) {
+        switch target {
+        case .backupSource: backupSource = url
+        case .backupDest: backupDest = url
+        case .restoreSource: restoreSource = url
+        case .restoreDest: restoreDest = url
         }
-        manager.backupFolder(from: src, toParent: manager.localBackupRoot(), name: name) { ok, msg in
+    }
+
+    // MARK: - 备份 / 恢复
+
+    func startBackup() {
+        guard let src = backupSource, let dstParent = backupDest else { return }
+        let name = backupName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        manager.backupFolder(from: src, toParent: dstParent, name: name) { ok, msg in
             if ok {
-                manager.addRecord(name: name, sourceName: src.lastPathComponent, destName: "本机")
-                lastBackupURL = manager.localBackupRoot().appendingPathComponent(name, isDirectory: true)
+                manager.addRecord(name: name, sourceName: src.lastPathComponent, destName: dstParent.lastPathComponent)
                 backupName = defaultBackupName()
-                refresh()
-                alertText = "备份成功，可点“分享备份”存到 iCloud 云盘"
+                alertText = "备份成功：\(msg)"
             } else {
                 alertText = msg
             }
@@ -200,26 +213,10 @@ struct ContentView: View {
     }
 
     func startRestore() {
-        guard let src = selectedBackup else { return }
-        let name = restoreName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
-        manager.backupFolder(from: src, toParent: documentsDir(), name: name) { ok, msg in
-            if ok {
-                refresh()
-                alertText = "恢复成功：已恢复到“备份助手/\(name)”"
-            } else {
-                alertText = msg
-            }
+        guard let src = restoreSource, let dst = restoreDest else { return }
+        manager.restoreFolder(from: src, toParent: dst) { ok, msg in
+            alertText = ok ? "恢复成功：\(msg)" : msg
             showAlert = true
         }
-    }
-
-    func shareURL(_ url: URL) {
-        let avc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-        if let pop = avc.popoverPresentationController {
-            pop.sourceView = topVC()?.view
-            pop.sourceRect = CGRect(x: 200, y: 200, width: 1, height: 1)
-        }
-        topVC()?.present(avc, animated: true)
     }
 }
