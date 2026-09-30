@@ -104,6 +104,8 @@ struct ContentView: View {
     @State private var backupZips: [URL] = []
     @State private var selectedZip: URL?
     @State private var showUnzipDestPicker = false
+    // v9.6: 导入 zip 引导弹窗
+    @State private var showImportGuide = false
 
     @State private var alertText = ""
     @State private var showAlert = false
@@ -197,8 +199,15 @@ struct ContentView: View {
                         .font(.footnote)
                         .foregroundColor(.secondary)
 
-                    Button("＋ 从“文件”App 导入 zip") { openFilesApp() }
+                    // v9.6: 先弹窗讲清两步，避免用户在文件 App 里直接点 zip（系统会就地解压无选择）
+                    Button("＋ 从“文件”App 导入 zip") { showImportGuide = true }
                         .font(.footnote)
+                        .alert("导入 zip 两步走", isPresented: $showImportGuide) {
+                            Button("去文件 App 放 zip") { openFilesApp() }
+                            Button("取消", role: .cancel) {}
+                        } message: {
+                            Text("① 在文件 App 把 zip 拷进“备份助手”文件夹\n② 回到备份助手 App，在下面点 zip 选文件夹解压\n\n⚠️ 别在文件 App 里直接点 zip，系统会就地解压不让你选")
+                        }
                     Text("在文件 App 里把任意 zip 拷贝到“备份助手”文件夹，回来这里自动出现。")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -282,6 +291,10 @@ struct ContentView: View {
                         .font(.footnote)
                         .foregroundColor(.secondary)
                     Button("去“文件”App 分享文件夹") { openFilesApp() }
+                }
+                // v9.6: 版本号，报问题时对照
+                Section {
+                    Text("版本 v9.6").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
