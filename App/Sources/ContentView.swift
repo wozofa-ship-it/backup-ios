@@ -26,9 +26,12 @@ struct ContentView: View {
     @State private var restoreSource: URL?
     @State private var restoreDest: URL?
 
-    @State private var folderCoordinator: FolderPickerCoordinator?
-    @State private var exportCoordinator: ExportPickerCoordinator?
+    @State private var importTarget: PickerTarget?
+    @State private var showImporter = false
+    @State private var showFileTestImporter = false
+    @State private var debugStatus = ""
     @State private var lastBackupURL: URL?
+    @State private var exportCoordinator: ExportPickerCoordinator?
 
     @State private var alertText = ""
     @State private var showAlert = false
@@ -54,9 +57,6 @@ struct ContentView: View {
                     folderRow(title: "要备份的文件夹", url: backupSource) {
                         pick(.backupSource)
                     }
-                    Text("进入文件夹后，点右上角「打开」即选中。")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
 
                     Picker("保存位置", selection: $destMode) {
                         Text("本机").tag(DestMode.local)
@@ -72,9 +72,6 @@ struct ContentView: View {
                         folderRow(title: "目标文件夹", url: backupDest) {
                             pick(.backupDest)
                         }
-                        Text("进入目标文件夹后，点右上角「打开」即选中；也可选 iCloud 云盘。")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
                     }
 
                     Button("开始备份") {
@@ -105,9 +102,6 @@ struct ContentView: View {
                     folderRow(title: "恢复到哪个目录", url: restoreDest) {
                         pick(.restoreDest)
                     }
-                    Text("进入文件夹后，点右上角「打开」即选中。")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
                     Button("开始恢复") {
                         startRestore()
                     }
@@ -129,8 +123,28 @@ struct ContentView: View {
                         .onDelete(perform: manager.deleteRecord)
                     }
                 }
+
+                Section(header: Text("诊断 v1.5")) {
+                    Text(debugStatus.isEmpty ? "选择器状态：等待操作" : debugStatus)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    Button("测试：选个文件") {
+                        showFileTestImporter = true
+                    }
+                    .fileImporter(isPresented: $showFileTestImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+                        switch result {
+                        case .success(let url):
+                            debugStatus = "文件选择成功：\(url.lastPathComponent)"
+                        case .failure(let error):
+                            debugStatus = "文件选择失败：\(error.localizedDescription)"
+                        }
+                    }
+                }
             }
             .navigationTitle("备份助手")
+            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
+                handleFolderResult(result)
+            }
             .alert("提示", isPresented: $showAlert) {
                 Button("好") {}
             } message: {
@@ -159,22 +173,27 @@ struct ContentView: View {
         return f.string(from: d)
     }
 
-    // MARK: - Actions
+    // MARK: - 选择器（SwiftUI 原生 fileImporter）
 
     func pick(_ target: PickerTarget) {
-        let vc = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder])
-        let coordinator = FolderPickerCoordinator(
-            onPick: { [target] url in
-                self.assignPicked(url, target: target)
-                self.folderCoordinator = nil
-            },
-            onCancel: {
-                self.folderCoordinator = nil
-            }
-        )
-        vc.delegate = coordinator
-        folderCoordinator = coordinator
-        topVC()?.present(vc, animated: true)
+        importTarget = target
+        debugStatus = "选择器已弹出，请选文件夹后点“打开”…"
+        showImporter = true
+    }
+
+    func handleFolderResult(_ result: Result<URL, Error>) {
+        guard let target = importTarget else {
+            debugStatus = "回调异常：target 为空"
+            return
+        }
+        importTarget = nil
+        switch result {
+        case .success(let url):
+            debugStatus = "文件夹选择成功：\(url.lastPathComponent)"
+            assignPicked(url, target: target)
+        case .failure(let error):
+            debugStatus = "文件夹选择失败/取消：\(error.localizedDescription)"
+        }
     }
 
     func assignPicked(_ url: URL, target: PickerTarget) {
@@ -190,6 +209,8 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - 导出（系统保存面板）
+
     func exportBackup() {
         guard let u = lastBackupURL else { return }
         let vc = UIDocumentPickerViewController(forExporting: [u], asCopy: true)
@@ -200,6 +221,8 @@ struct ContentView: View {
         exportCoordinator = coordinator
         topVC()?.present(vc, animated: true)
     }
+
+    // MARK: - 备份 / 恢复
 
     func startBackup() {
         guard let src = backupSource else { return }
