@@ -77,6 +77,21 @@ class BackupManager: ObservableObject {
         saveRecords()
     }
 
+    // v9.5: 给磁盘上无记录的 zip 自动建备份记录（分享扩展打出来的），用文件修改日期
+    func ensureRecordForZip(name: String, fileDate: Date) {
+        guard !records.contains(where: { $0.name == name }) else { return }
+        // 从文件名猜源文件夹名：去掉 "-MMdd-HHmm.zip" 后缀
+        var src = (name as NSString).deletingPathExtension
+        if let range = src.range(of: "-\\d{4}-\\d{4}$", options: .regularExpression) {
+            src = String(src[..<range.lowerBound])
+        }
+        records.insert(BackupRecord(name: name, date: fileDate, sourceName: src.isEmpty ? "分享导入" : src, destName: "本机", kind: "backup"), at: 0)
+        if records.count > 50 {
+            records = Array(records.prefix(50))
+        }
+        saveRecords()
+    }
+
     func deleteRecord(at offsets: IndexSet) {
         records.remove(atOffsets: offsets)
         saveRecords()

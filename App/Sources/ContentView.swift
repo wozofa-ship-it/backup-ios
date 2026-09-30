@@ -237,13 +237,10 @@ struct ContentView: View {
                 }
 
                 // MARK: 记录
-                // v9.2: 正式记录 + 磁盘上无记录的 zip 都列出来，每条可直接恢复
+                // v9.5: refresh() 已自动给无记录 zip 建档，这里只显示正式记录
                 Section(header: Text("备份记录")) {
-                    let orphanZips = backupZips.filter { zip in
-                        !manager.records.contains { $0.name == zip.lastPathComponent }
-                    }
-                    if manager.records.isEmpty && orphanZips.isEmpty {
-                        Text("暂无记录：完成一次备份后这里会显示")
+                    if manager.records.isEmpty {
+                        Text("暂无记录：完成一次备份/恢复后这里会显示")
                             .font(.footnote).foregroundColor(.secondary)
                     } else {
                         ForEach(manager.records) { r in
@@ -276,19 +273,6 @@ struct ContentView: View {
                             }
                         }
                         .onDelete(perform: manager.deleteRecord)
-                        // v9.2: 磁盘上有但没正式记录的 zip（分享扩展/手动存入的）
-                        ForEach(orphanZips, id: \.path) { url in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(url.lastPathComponent).font(.headline)
-                                Text("\(fileSizeString(url)) · 通过分享/手动存入 · \(zipLocation(url))")
-                                    .font(.caption).foregroundColor(.secondary)
-                                Button("恢复此备份") {
-                                    selectedZip = url
-                                    showUnzipDestPicker = true
-                                }
-                                .font(.footnote)
-                            }
-                        }
                     }
                 }
 
@@ -334,6 +318,13 @@ struct ContentView: View {
         // v9.0: 备份/子目录和Documents根目录的zip都列出来（扩展存过来的也在根目录）
         let allZips = listZips(in: manager.localBackupRoot()) + listZips(in: documentsDir())
         backupZips = allZips.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        // v9.5: 给无记录的 zip 自动建备份记录（分享扩展打出来的包）
+        let fm = FileManager.default
+        for zip in backupZips {
+            let attrs = try? fm.attributesOfItem(atPath: zip.path)
+            let mdate = (attrs?[.modificationDate] as? Date) ?? Date()
+            manager.ensureRecordForZip(name: zip.lastPathComponent, fileDate: mdate)
+        }
         if imported > 0 {
             alertText = "已从分享导入 \(imported) 个项目，可直接备份/恢复"
             showAlert = true
