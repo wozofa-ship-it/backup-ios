@@ -131,7 +131,7 @@ struct ContentView: View {
                     Button("测试：选个文件") {
                         showFileTestImporter = true
                     }
-                    .fileImporter(isPresented: $showFileTestImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+                    .fileImporter(isPresented: $showFileTestImporter, allowedContentTypes: [.item]) { result in
                         switch result {
                         case .success(let url):
                             debugStatus = "文件选择成功：\(url.lastPathComponent)"
@@ -142,7 +142,7 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("备份助手")
-            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
+            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
                 handleFolderResult(result)
             }
             .alert("提示", isPresented: $showAlert) {
