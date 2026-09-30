@@ -107,8 +107,9 @@ struct ContentView: View {
 
     // 剪贴板提示
     @State private var showPasteboardHint = false
-    // 备份后清理
-    @State private var showCleanupConfirm = false
+    // v9.0: 备份完成弹窗（保存位置+分享+清理三合一）
+    @State private var showBackupDone = false
+    @State private var backupDoneText = ""
 
     var body: some View {
         NavigationView {
@@ -201,7 +202,10 @@ struct ContentView: View {
                             } label: {
                                 HStack {
                                     Image(systemName: "doc.zipper.fill").foregroundColor(.orange)
-                                    Text(url.lastPathComponent).foregroundColor(.primary)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(url.lastPathComponent).foregroundColor(.primary)
+                                        Text(zipLocation(url)).font(.caption).foregroundColor(.secondary)
+                                    }
                                     Spacer()
                                     Image(systemName: "chevron.right").foregroundColor(.secondary).font(.footnote)
                                 }
@@ -231,6 +235,14 @@ struct ContentView: View {
                                 Text(r.name).font(.headline)
                                 Text("\(formatDate(r.date)) · \(r.sourceName) → \(r.destName)")
                                     .font(.caption).foregroundColor(.secondary)
+                                // v9.0: 显示备份文件是否存在、大小，方便查看
+                                if let url = backupZips.first(where: { $0.lastPathComponent == r.name }) {
+                                    Text("✅ 文件存在 · \(fileSizeString(url)) · 去“恢复”区可解压")
+                                        .font(.caption).foregroundColor(.green)
+                                } else {
+                                    Text("⚠️ 备份文件已不在（可能已删除或移动）")
+                                        .font(.caption).foregroundColor(.orange)
+                                }
                             }
                         }
                         .onDelete(perform: manager.deleteRecord)
@@ -248,14 +260,16 @@ struct ContentView: View {
                 checkPasteboard()
             }
             .alert("提示", isPresented: $showAlert) { Button("好") {} } message: { Text(alertText) }
-            .alert("备份完成", isPresented: $showCleanupConfirm, presenting: lastBackupSource) { url in
-                Button("保留源文件夹", role: .cancel) {}
+            // v9.0: 备份完成弹窗——明确保存位置，可分享，可清理源文件夹
+            .alert("备份完成", isPresented: $showBackupDone, presenting: lastBackupSource) { src in
+                Button("分享到 iCloud") { if let u = lastBackupURL { shareURL(u) } }
                 Button("删除源文件夹", role: .destructive) {
-                    try? FileManager.default.removeItem(at: url)
+                    try? FileManager.default.removeItem(at: src)
                     refresh()
                 }
-            } message: { url in
-                Text("「\(url.lastPathComponent)」已备份。是否删除源文件夹以节省空间？")
+                Button("保留", role: .cancel) {}
+            } message: { _ in
+                Text(backupDoneText)
             }
         }
     }
@@ -266,11 +280,26 @@ struct ContentView: View {
         // v7.0：先把分享扩展导入的内容搬进来
         let imported = importFromShareExtension(backupRoot: manager.localBackupRoot())
         sourceFolders = listFolders(in: documentsDir(), excluding: ["备份"])
-        backupZips = listZips(in: manager.localBackupRoot())
+        // v9.0: 备份/子目录和Documents根目录的zip都列出来（扩展存过来的也在根目录）
+        let allZips = listZips(in: manager.localBackupRoot()) + listZips(in: documentsDir())
+        backupZips = allZips.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
         if imported > 0 {
             alertText = "已从分享导入 \(imported) 个项目，可直接备份/恢复"
             showAlert = true
         }
+    }
+
+    // v9.0: 显示zip所在位置
+    func zipLocation(_ url: URL) -> String {
+        url.deletingLastPathComponent().lastPathComponent == "备份" ? "备份助手/备份/" : "备份助手/"
+    }
+
+    // v9.0: 文件大小显示
+    func fileSizeString(_ url: URL) -> String {
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) else { return "" }
+        let f = ByteCountFormatter()
+        f.countStyle = .file
+        return f.string(fromByteCount: size)
     }
 
     func checkPasteboard() {
@@ -313,8 +342,9 @@ struct ContentView: View {
                     lastBackupSource = src
                     backupName = defaultBackupName()
                     refresh()
-                    // v6.0：备份成功后询问是否删除源文件夹
-                    showCleanupConfirm = true
+                    // v9.0: 备份完成弹窗，明确告诉用户zip存哪了
+                    backupDoneText = "「\(finalName).zip」\n已保存到 备份助手/备份/\n\n在“文件”App的备份助手文件夹中可以找到。"
+                    showBackupDone = true
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -368,10 +398,25 @@ struct UnzipDestView: View {
     let folders: [URL]
     let onPick: (URL) -> Void
     let onCancel: () -> Void
+    @State private var newFolderName = ""
 
     var body: some View {
         NavigationView {
             List {
+                // v9.0: 可新建文件夹作为解压目标
+                Section(header: Text("新建文件夹")) {
+                    HStack {
+                        TextField("输入新文件夹名", text: $newFolderName)
+                        Button("创建并解压") {
+                            let name = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let dest = documentsDir().appendingPathComponent(name, isDirectory: true)
+                            try? FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+                            newFolderName = ""
+                            onPick(dest)
+                        }
+                        .disabled(newFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
                 Section(header: Text("解压「\(zipURL?.lastPathComponent ?? "")」到…")) {
                     Button {
                         onPick(documentsDir())

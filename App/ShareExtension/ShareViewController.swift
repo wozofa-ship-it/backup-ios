@@ -171,7 +171,7 @@ class ShareViewController: UIViewController {
     private func presentShareSheet(zipURLs: [URL]) {
         spinner.stopAnimating()
         spinner.isHidden = true
-        statusLabel.text = "压缩完成，共 \(zipURLs.count) 个zip包\n请选择保存位置"
+        statusLabel.text = "压缩完成，共 \(zipURLs.count) 个zip包\n请选择保存位置\n（建议存到“备份助手”文件夹，方便在App里恢复）"
 
         let activityVC = UIActivityViewController(activityItems: zipURLs, applicationActivities: nil)
         // iPad 弹出位置
