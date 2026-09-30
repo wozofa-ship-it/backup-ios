@@ -121,10 +121,22 @@ class ShareViewController: UIViewController {
 
             var coordError: NSError?
             var zipError: Error?
+            // 节流：0.3秒刷新一次进度，避免刷爆主线程
+            var lastUIUpdate = Date.distantPast
+            let itemIndex = index, itemTotal = urls.count
             NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
                 do {
                     if isDir.boolValue {
-                        try zipDirectory(at: readURL, to: zipURL)
+                        try zipDirectory(at: readURL, to: zipURL) { done, total, name in
+                            let now = Date()
+                            if now.timeIntervalSince(lastUIUpdate) > 0.3 || done == total {
+                                lastUIUpdate = now
+                                let d = done, t = total, n = (name as NSString).lastPathComponent
+                                DispatchQueue.main.async {
+                                    self.statusLabel.text = "正在压缩 \(itemIndex + 1)/\(itemTotal)\n\(d)/\(t) \(n)"
+                                }
+                            }
+                        }
                     } else {
                         // 单个文件：先拷进临时文件夹再打包
                         let single = tmp.appendingPathComponent("single", isDirectory: true)
