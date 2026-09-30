@@ -80,6 +80,29 @@ func topVC() -> UIViewController? {
     return vc
 }
 
+// v9.1: 系统选择器诊断。排查结论：
+// - v3.0 用 allowsMultipleSelection=true，撞上 iOS 已知 bug（多选模式下进文件夹点"打开"无响应，delegate 不触发）
+// - v3.1 改单选但用了独立 UIWindow 弹出，UIDocumentPickerViewController 是远程视图，自定义窗口可能破坏其触摸/展示
+// - 从没试过"单选 + 主窗口常规弹出"，这次单独测试验证
+class TestPickerDelegate: NSObject, UIDocumentPickerDelegate {
+    static let shared = TestPickerDelegate()
+    var onResult: ((Bool, String) -> Void)?
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        let name = urls.first?.lastPathComponent ?? "?"
+        let path = urls.first?.path ?? ""
+        controller.dismiss(animated: true) { [weak self] in
+            DispatchQueue.main.async { self?.onResult?(true, "\(name)||\(path)") }
+        }
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        controller.dismiss(animated: true) { [weak self] in
+            DispatchQueue.main.async { self?.onResult?(false, "用户取消了选择") }
+        }
+    }
+}
+
 // 检查剪贴板是否有文件 URL（iOS 不允许直接读取，只能检测到）
 func pasteboardHasFiles() -> Bool {
     let pb = UIPasteboard.general
@@ -110,6 +133,10 @@ struct ContentView: View {
     // v9.0: 备份完成弹窗（保存位置+分享+清理三合一）
     @State private var showBackupDone = false
     @State private var backupDoneText = ""
+    // v9.1: 系统选择器诊断测试
+    @State private var testPickerStatus = ""
+    @State private var testPickedPath = ""
+
 
     var body: some View {
         NavigationView {
@@ -248,6 +275,20 @@ struct ContentView: View {
                         .onDelete(perform: manager.deleteRecord)
                     }
                 }
+
+                // v9.1: 系统选择器诊断测试
+                Section(header: Text("诊断")) {
+                    Text("测试系统文件夹选择器能不能用（单选模式）。点按钮 → 进任意文件夹 → 点右上角“打开”，看下面显示什么。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    Button("🧪 测试系统文件夹选择器") { testSystemPicker() }
+                    if !testPickerStatus.isEmpty {
+                        Text(testPickerStatus).font(.footnote)
+                        if !testPickedPath.isEmpty {
+                            Text(testPickedPath).font(.caption).foregroundColor(.secondary)
+                        }
+                    }
+                }
             }
             .navigationTitle("备份助手")
             .onAppear {
@@ -317,6 +358,27 @@ struct ContentView: View {
         if let url = URL(string: "shareddocuments://") {
             UIApplication.shared.open(url, options: [:], completionHandler: nil)
         }
+    }
+
+    // v9.1: 系统文件夹选择器诊断测试（单选+主窗口常规弹出）
+    func testSystemPicker() {
+        let vc = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder])
+        // 注意：故意不设 allowsMultipleSelection，单选模式，避开已知多选 bug
+        TestPickerDelegate.shared.onResult = { ok, result in
+            if ok {
+                let parts = result.components(separatedBy: "||")
+                self.testPickerStatus = "✅ 选到了：\(parts[0])"
+                self.testPickedPath = parts.count > 1 ? parts[1] : ""
+            } else {
+                self.testPickerStatus = "🚫 \(result)"
+                self.testPickedPath = ""
+            }
+            TestPickerDelegate.shared.onResult = nil
+        }
+        vc.delegate = TestPickerDelegate.shared
+        testPickerStatus = "选择器已弹出：进文件夹 → 点右上角“打开”…"
+        testPickedPath = ""
+        topVC()?.present(vc, animated: true)
     }
 
     func startZipBackup(from src: URL) {
