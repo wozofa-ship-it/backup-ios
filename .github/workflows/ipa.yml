@@ -1,0 +1,52 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Decode app icons
+        run: |
+          cd App/Assets.xcassets/AppIcon.appiconset
+          python3 << 'EOF'
+          import json, base64, glob
+          for f in glob.glob('icons*.json'):
+              for name, b64 in json.load(open(f)).items():
+                  open(name, 'wb').write(base64.b64decode(b64))
+          EOF
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build unsigned archive
+        run: |
+          xcodebuild -project BackupApp.xcodeproj \
+            -scheme BackupApp \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/BackupApp.xcarchive \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -R "build/BackupApp.xcarchive/Products/Applications/BackupApp.app" Payload/
+          zip -r BackupApp-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: BackupApp-unsigned-ipa
+          path: BackupApp-unsigned.ipa
