@@ -1,22 +1,20 @@
 import UIKit
 import UniformTypeIdentifiers
 
-/// 分享扩展：在系统分享菜单中显示"备份助手"，
-/// 把用户分享的文件/文件夹复制到 App Group 共享容器，
-/// 主 App 下次打开时自动导入。
+/// v8.0 分享扩展：不依赖 App Group。
+/// 流程：文件App长按文件夹 → 发送副本 → 备份助手 → 扩展打成zip →
+/// 弹出系统分享菜单 → 用户选"存储到文件"存进 iCloud 云盘。
+/// 恢复：在文件App里直接点zip包，系统自动解压。
 class ShareViewController: UIViewController {
-
-    static let appGroupID = "group.com.quseqi.backup.shared"
 
     private let statusLabel = UILabel()
     private let spinner = UIActivityIndicatorView(style: .large)
-    private let lock = NSLock()
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
 
-        statusLabel.text = "正在导入到备份助手…"
+        statusLabel.text = "准备中…"
         statusLabel.textAlignment = .center
         statusLabel.numberOfLines = 0
         statusLabel.font = .systemFont(ofSize: 15)
@@ -35,22 +33,15 @@ class ShareViewController: UIViewController {
             statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
         ])
 
-        preferredContentSize = CGSize(width: 320, height: 200)
-        importSharedItems()
+        preferredContentSize = CGSize(width: 340, height: 220)
+        processItems()
     }
 
-    private func importSharedItems() {
+    private func processItems() {
         guard let extensionItems = extensionContext?.inputItems as? [NSExtensionItem],
               !extensionItems.isEmpty else {
-            return fail("没有可导入的内容")
+            return fail("没有可备份的内容")
         }
-
-        let fm = FileManager.default
-        guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupID) else {
-            return fail("共享容器不可用\n请在备份助手中手动导入")
-        }
-        let incoming = container.appendingPathComponent("Incoming", isDirectory: true)
-        try? fm.createDirectory(at: incoming, withIntermediateDirectories: true)
 
         var providers: [NSItemProvider] = []
         for item in extensionItems {
@@ -61,82 +52,141 @@ class ShareViewController: UIViewController {
             }
         }
         guard !providers.isEmpty else {
-            return fail("没有可导入的文件")
+            return fail("没有可备份的文件")
         }
 
+        statusLabel.text = "正在读取 \(providers.count) 个项目…"
         let group = DispatchGroup()
-        var imported = 0
-        var lastError: String?
+        var sourceURLs: [URL] = []
+        let lock = NSLock()
 
         for provider in providers {
             group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, error in
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
                 defer { group.leave() }
-                guard let url = data as? URL else {
-                    self.lock.lock()
-                    lastError = (error as NSError?)?.localizedDescription ?? "未知错误"
-                    self.lock.unlock()
-                    return
+                if let url = data as? URL {
+                    lock.lock()
+                    sourceURLs.append(url)
+                    lock.unlock()
                 }
-                let didAccess = url.startAccessingSecurityScopedResource()
-                defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
-
-                var copyError: Error?
-                var dest: URL = incoming.appendingPathComponent(url.lastPathComponent)
-                // 重名时自动加序号
-                var n = 2
-                while fm.fileExists(atPath: dest.path) {
-                    let base = url.deletingPathExtension().lastPathComponent
-                    let ext = url.pathExtension
-                    let name = ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)"
-                    dest = incoming.appendingPathComponent(name)
-                    n += 1
-                }
-                let finalDest = dest
-                var coordError: NSError?
-                NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
-                    do {
-                        try fm.copyItem(at: readURL, to: finalDest)
-                    } catch {
-                        copyError = error
-                    }
-                }
-                self.lock.lock()
-                if let e = copyError ?? coordError {
-                    lastError = (e as NSError).localizedDescription
-                } else {
-                    imported += 1
-                }
-                self.lock.unlock()
             }
         }
 
-        group.notify(queue: .main) {
-            if imported > 0 {
-                self.succeed("已导入 \(imported) 个项目\n打开备份助手即可备份")
-            } else {
-                self.fail("导入失败：\(lastError ?? "未知错误")")
-            }
+        group.notify(queue: .global(qos: .userInitiated)) {
+            self.zipAndShare(urls: sourceURLs)
         }
     }
 
-    private func succeed(_ text: String) {
+    private func zipAndShare(urls: [URL]) {
+        guard !urls.isEmpty else {
+            return fail("读取分享内容失败")
+        }
+
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent("BackupShare", isDirectory: true)
+        try? fm.removeItem(at: tmp)
+        try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let dateStr: String = {
+            let f = DateFormatter()
+            f.dateFormat = "MMdd-HHmm"
+            return f.string(from: Date())
+        }()
+
+        var zipURLs: [URL] = []
+
+        for (index, url) in urls.enumerated() {
+            let didAccess = url.startAccessingSecurityScopedResource()
+            defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+
+            DispatchQueue.main.async {
+                self.statusLabel.text = "正在压缩 \(index + 1)/\(urls.count)\n\(url.lastPathComponent)"
+            }
+
+            // zip 包直接透传（提示用户点开即解压）；其他打成zip
+            if url.pathExtension.lowercased() == "zip" {
+                let dest = tmp.appendingPathComponent(url.lastPathComponent)
+                var coordError: NSError?
+                NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
+                    try? fm.copyItem(at: readURL, to: dest)
+                }
+                if fm.fileExists(atPath: dest.path) { zipURLs.append(dest) }
+                continue
+            }
+
+            var isDir: ObjCBool = false
+            _ = fm.fileExists(atPath: url.path, isDirectory: &isDir)
+            let zipName = "\(url.deletingPathExtension().lastPathComponent)-\(dateStr).zip"
+            let zipURL = tmp.appendingPathComponent(zipName)
+
+            var coordError: NSError?
+            var zipError: Error?
+            NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
+                do {
+                    if isDir.boolValue {
+                        try zipDirectory(at: readURL, to: zipURL)
+                    } else {
+                        // 单个文件：先拷进临时文件夹再打包
+                        let single = tmp.appendingPathComponent("single", isDirectory: true)
+                        try? fm.createDirectory(at: single, withIntermediateDirectories: true)
+                        let target = single.appendingPathComponent(readURL.lastPathComponent)
+                        if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
+                        try fm.copyItem(at: readURL, to: target)
+                        let oneZipName = "\(readURL.deletingPathExtension().lastPathComponent)-\(dateStr).zip"
+                        let oneZipURL = tmp.appendingPathComponent(oneZipName)
+                        try zipDirectory(at: single, to: oneZipURL)
+                        try? fm.removeItem(at: single)
+                        try fm.moveItem(at: oneZipURL, to: zipURL)
+                    }
+                } catch {
+                    zipError = error
+                }
+            }
+            if let e = zipError ?? coordError {
+                DispatchQueue.main.async {
+                    self.fail("压缩失败：\((e as NSError).localizedDescription)")
+                }
+                return
+            }
+            zipURLs.append(zipURL)
+        }
+
+        DispatchQueue.main.async {
+            self.presentShareSheet(zipURLs: zipURLs)
+        }
+    }
+
+    private func presentShareSheet(zipURLs: [URL]) {
         spinner.stopAnimating()
         spinner.isHidden = true
-        statusLabel.text = "✅ " + text
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-            self.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
+        statusLabel.text = "压缩完成，共 \(zipURLs.count) 个zip包\n请选择保存位置"
+
+        let activityVC = UIActivityViewController(activityItems: zipURLs, applicationActivities: nil)
+        // iPad 弹出位置
+        if let pop = activityVC.popoverPresentationController {
+            pop.sourceView = view
+            pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 0, height: 0)
+            pop.permittedArrowDirections = []
         }
+        activityVC.completionWithItemsHandler = { [weak self] _, _, _, _ in
+            // 清理临时文件
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("BackupShare", isDirectory: true)
+            try? FileManager.default.removeItem(at: tmp)
+            self?.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
+        }
+        present(activityVC, animated: true)
     }
 
     private func fail(_ text: String) {
-        spinner.stopAnimating()
-        spinner.isHidden = true
-        statusLabel.text = "⚠️ " + text
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
-            self.extensionContext?.cancelRequest(withError: NSError(
-                domain: "backup.share", code: -1,
-                userInfo: [NSLocalizedDescriptionKey: text]))
+        DispatchQueue.main.async {
+            self.spinner.stopAnimating()
+            self.spinner.isHidden = true
+            self.statusLabel.text = "⚠️ " + text
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+                self.extensionContext?.cancelRequest(withError: NSError(
+                    domain: "backup.share", code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: text]))
+            }
         }
     }
 }
