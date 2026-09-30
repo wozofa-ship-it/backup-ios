@@ -1,0 +1,22 @@
+name: BackupApp
+
+options:
+  bundleIdPrefix: com.quseqi.backup
+  deploymentTarget:
+    iOS: "15.0"
+
+targets:
+  BackupApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/Sources
+      - path: App/Assets.xcassets
+        buildPhase: resources
+    settings:
+      GENERATE_INFOPLIST_FILE: "YES"
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+      INFOPLIST_KEY_CFBundleDisplayName: "备份助手"
+      INFOPLIST_KEY_UIFileSharingEnabled: "YES"
+      INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: "YES"
