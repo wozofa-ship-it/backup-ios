@@ -126,6 +126,14 @@ class BackupManager: ObservableObject {
 
     // MARK: - 工具
 
+    /// 本机备份根目录：App 的 Documents/备份（在“文件”App 中可见）
+    func localBackupRoot() -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dir = docs.appendingPathComponent("备份", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
     private func relativePaths(under root: URL) -> [String] {
         var result: [String] = []
         let fm = FileManager.default
