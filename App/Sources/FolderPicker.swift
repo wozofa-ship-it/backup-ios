@@ -34,3 +34,14 @@ struct FolderPicker: UIViewControllerRepresentable {
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {}
     }
 }
+
+/// 导出备份：弹出系统保存位置选择器（含 iCloud 云盘），把备份复制过去
+struct ExportPicker: UIViewControllerRepresentable {
+    var url: URL
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        UIDocumentPickerViewController(forExporting: [url], asCopy: true)
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+}
