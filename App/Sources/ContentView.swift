@@ -4,6 +4,10 @@ enum PickerTarget {
     case backupSource, backupDest, restoreSource, restoreDest
 }
 
+enum DestMode: Hashable {
+    case local, custom
+}
+
 func defaultBackupName() -> String {
     let f = DateFormatter()
     f.dateFormat = "yyyyMMdd-HHmmss"
@@ -16,14 +20,29 @@ struct ContentView: View {
     @State private var backupName: String = defaultBackupName()
     @State private var backupSource: URL?
     @State private var backupDest: URL?
+    @State private var destMode: DestMode = .local
     @State private var restoreSource: URL?
     @State private var restoreDest: URL?
 
     @State private var pickerTarget: PickerTarget?
     @State private var showPicker = false
+    @State private var lastBackupURL: URL?
+    @State private var showExporter = false
 
     @State private var alertText = ""
     @State private var showAlert = false
+
+    var canBackup: Bool {
+        guard !manager.isWorking,
+              backupSource != nil,
+              !backupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        if destMode == .custom {
+            return backupDest != nil
+        }
+        return true
+    }
 
     var body: some View {
         NavigationView {
@@ -34,15 +53,39 @@ struct ContentView: View {
                     folderRow(title: "要备份的文件夹", url: backupSource) {
                         pick(.backupSource)
                     }
+                    Text("进入文件夹后，点右上角「打开」即选中。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
 
-                    folderRow(title: "保存位置（可选 iCloud 云盘）", url: backupDest) {
-                        pick(.backupDest)
+                    Picker("保存位置", selection: $destMode) {
+                        Text("本机").tag(DestMode.local)
+                        Text("选文件夹").tag(DestMode.custom)
+                    }
+                    .pickerStyle(.segmented)
+
+                    if destMode == .local {
+                        Text("保存在本 App 的「备份」文件夹，可在“文件”App 中查看。")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    } else {
+                        folderRow(title: "目标文件夹", url: backupDest) {
+                            pick(.backupDest)
+                        }
+                        Text("进入目标文件夹后，点右上角「打开」即选中；也可选 iCloud 云盘。")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
                     }
 
                     Button("开始备份") {
                         startBackup()
                     }
-                    .disabled(manager.isWorking || backupSource == nil || backupDest == nil || backupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!canBackup)
+
+                    if lastBackupURL != nil {
+                        Button("导出到 iCloud 云盘") {
+                            showExporter = true
+                        }
+                    }
                 }
 
                 if manager.isWorking || !manager.status.isEmpty {
@@ -58,11 +101,12 @@ struct ContentView: View {
                     folderRow(title: "选择备份文件夹", url: restoreSource) {
                         pick(.restoreSource)
                     }
-
                     folderRow(title: "恢复到哪个目录", url: restoreDest) {
                         pick(.restoreDest)
                     }
-
+                    Text("进入文件夹后，点右上角「打开」即选中。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                     Button("开始恢复") {
                         startRestore()
                     }
@@ -84,18 +128,17 @@ struct ContentView: View {
                         .onDelete(perform: manager.deleteRecord)
                     }
                 }
-
-                Section {
-                    Text("提示：在文件选择器里可以进入“iCloud 云盘”，备份到 iCloud 需要联网同步。")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                }
             }
             .navigationTitle("备份助手")
             .sheet(isPresented: $showPicker) {
                 FolderPicker { url in
                     assignPicked(url)
                     showPicker = false
+                }
+            }
+            .sheet(isPresented: $showExporter) {
+                if let u = lastBackupURL {
+                    ExportPicker(url: u)
                 }
             }
             .alert("提示", isPresented: $showAlert) {
@@ -149,12 +192,25 @@ struct ContentView: View {
     }
 
     func startBackup() {
-        guard let src = backupSource, let dst = backupDest else { return }
+        guard let src = backupSource else { return }
         let name = backupName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-        manager.backupFolder(from: src, toParent: dst, name: name) { ok, msg in
+
+        let dstParent: URL
+        let destLabel: String
+        if destMode == .local {
+            dstParent = manager.localBackupRoot()
+            destLabel = "本机"
+        } else {
+            guard let d = backupDest else { return }
+            dstParent = d
+            destLabel = d.lastPathComponent
+        }
+
+        manager.backupFolder(from: src, toParent: dstParent, name: name) { ok, msg in
             if ok {
-                manager.addRecord(name: name, sourceName: src.lastPathComponent, destName: dst.lastPathComponent)
+                manager.addRecord(name: name, sourceName: src.lastPathComponent, destName: destLabel)
+                lastBackupURL = dstParent.appendingPathComponent(name, isDirectory: true)
                 backupName = defaultBackupName()
                 alertText = "备份成功：\(msg)"
             } else {
