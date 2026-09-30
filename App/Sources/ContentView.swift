@@ -191,9 +191,16 @@ struct ContentView: View {
                 }
 
                 // MARK: 恢复（解压 zip）
+                // v9.3: 任何来源的 zip 都能恢复：去文件 App 把 zip 拷进"备份助手"文件夹，回来自动出现
                 Section(header: Text("恢复")) {
-                    Text("选一个 .zip 备份，再选解压到哪个文件夹。")
+                    Text("选一个 .zip，再选解压到哪个文件夹。任何来源的 zip 都行。")
                         .font(.footnote)
+                        .foregroundColor(.secondary)
+
+                    Button("＋ 从“文件”App 导入 zip") { openFilesApp() }
+                        .font(.footnote)
+                    Text("在文件 App 里把任意 zip 拷贝到“备份助手”文件夹，回来这里自动出现。")
+                        .font(.caption)
                         .foregroundColor(.secondary)
 
                     if backupZips.isEmpty {

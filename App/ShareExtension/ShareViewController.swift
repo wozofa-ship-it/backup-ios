@@ -43,12 +43,12 @@ class ShareViewController: UIViewController {
             return fail("没有可备份的内容")
         }
 
+        // v9.3: 不再预过滤 fileURL（某些来源如 LiveContainer 分享的类型对不上），
+        // 全部尝试加载，成功几个算几个，失败的如实报告
         var providers: [NSItemProvider] = []
         for item in extensionItems {
             if let atts = item.attachments {
-                providers.append(contentsOf: atts.filter {
-                    $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
-                })
+                providers.append(contentsOf: atts)
             }
         }
         guard !providers.isEmpty else {
@@ -58,21 +58,47 @@ class ShareViewController: UIViewController {
         statusLabel.text = "正在读取 \(providers.count) 个项目…"
         let group = DispatchGroup()
         var sourceURLs: [URL] = []
+        var failedCount = 0
         let lock = NSLock()
 
         for provider in providers {
             group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
-                defer { group.leave() }
-                if let url = data as? URL {
+            // 先试 fileURL，不行再试 public.item/data
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
+                    defer { group.leave() }
                     lock.lock()
-                    sourceURLs.append(url)
+                    if let url = data as? URL { sourceURLs.append(url) } else { failedCount += 1 }
                     lock.unlock()
                 }
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.data.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.data.identifier, options: nil) { data, _ in
+                    defer { group.leave() }
+                    lock.lock()
+                    if let url = data as? URL {
+                        sourceURLs.append(url)
+                    } else {
+                        failedCount += 1
+                    }
+                    lock.unlock()
+                }
+            } else {
+                // 类型不支持：列出它实际支持的类型，方便排查
+                let types = provider.registeredTypeIdentifiers.joined(separator: ", ")
+                print("[BackupShare] 不支持的类型: \(types)")
+                lock.lock()
+                failedCount += 1
+                lock.unlock()
+                group.leave()
             }
         }
 
         group.notify(queue: .global(qos: .userInitiated)) {
+            if !sourceURLs.isEmpty && failedCount > 0 {
+                DispatchQueue.main.async {
+                    self.statusLabel.text = "读取到 \(sourceURLs.count) 个，\(failedCount) 个类型不支持已跳过…"
+                }
+            }
             self.zipAndShare(urls: sourceURLs)
         }
     }
@@ -94,6 +120,8 @@ class ShareViewController: UIViewController {
         }()
 
         var zipURLs: [URL] = []
+        var zippedCount = 0
+        var passthroughCount = 0
 
         for (index, url) in urls.enumerated() {
             let didAccess = url.startAccessingSecurityScopedResource()
@@ -110,7 +138,10 @@ class ShareViewController: UIViewController {
                 NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
                     try? fm.copyItem(at: readURL, to: dest)
                 }
-                if fm.fileExists(atPath: dest.path) { zipURLs.append(dest) }
+                if fm.fileExists(atPath: dest.path) {
+                    zipURLs.append(dest)
+                    passthroughCount += 1
+                }
                 continue
             }
 
@@ -161,17 +192,28 @@ class ShareViewController: UIViewController {
                 return
             }
             zipURLs.append(zipURL)
+            zippedCount += 1
+        }
+
+        let doneCount = zippedCount + passthroughCount
+        let summary: String
+        if zippedCount > 0 && passthroughCount == 0 {
+            summary = "压缩完成，共 \(doneCount) 个 zip 包"
+        } else if passthroughCount > 0 && zippedCount == 0 {
+            summary = "收到 \(doneCount) 个 zip 包（无需压缩）"
+        } else {
+            summary = "完成：压缩 \(zippedCount) 个，透传 \(passthroughCount) 个"
         }
 
         DispatchQueue.main.async {
-            self.presentShareSheet(zipURLs: zipURLs)
+            self.presentShareSheet(zipURLs: zipURLs, summary: summary)
         }
     }
 
-    private func presentShareSheet(zipURLs: [URL]) {
+    private func presentShareSheet(zipURLs: [URL], summary: String) {
         spinner.stopAnimating()
         spinner.isHidden = true
-        statusLabel.text = "压缩完成，共 \(zipURLs.count) 个zip包\n请选择保存位置\n（建议存到“备份助手”文件夹，方便在App里恢复）"
+        statusLabel.text = "\(summary)\n请选择保存位置\n（建议存到“备份助手”文件夹，方便在App里恢复）"
 
         let activityVC = UIActivityViewController(activityItems: zipURLs, applicationActivities: nil)
         // iPad 弹出位置
@@ -193,12 +235,22 @@ class ShareViewController: UIViewController {
         DispatchQueue.main.async {
             self.spinner.stopAnimating()
             self.spinner.isHidden = true
-            self.statusLabel.text = "⚠️ " + text
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
-                self.extensionContext?.cancelRequest(withError: NSError(
-                    domain: "backup.share", code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: text]))
-            }
+            self.statusLabel.text = "⚠️ " + text + "\n\n点右上角关闭"
+            // v9.3: 错误常驻显示，加关闭按钮，不再 2.2 秒自动消失
+            let closeButton = UIButton(type: .system)
+            closeButton.setTitle("关闭", for: .normal)
+            closeButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
+            closeButton.translatesAutoresizingMaskIntoConstraints = false
+            closeButton.addTarget(self, action: #selector(self.closeExtension), for: .touchUpInside)
+            self.view.addSubview(closeButton)
+            NSLayoutConstraint.activate([
+                closeButton.topAnchor.constraint(equalTo: self.statusLabel.bottomAnchor, constant: 20),
+                closeButton.centerXAnchor.constraint(equalTo: self.view.centerXAnchor),
+            ])
         }
+    }
+
+    @objc private func closeExtension() {
+        extensionContext?.cancelRequest(withError: NSError(domain: "backup.share", code: -1))
     }
 }
