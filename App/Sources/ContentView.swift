@@ -1,4 +1,6 @@
 import SwiftUI
+import UniformTypeIdentifiers
+import UIKit
 
 enum PickerTarget {
     case backupSource, backupDest, restoreSource, restoreDest
@@ -24,10 +26,9 @@ struct ContentView: View {
     @State private var restoreSource: URL?
     @State private var restoreDest: URL?
 
-    @State private var pickerTarget: PickerTarget?
-    @State private var showPicker = false
+    @State private var folderCoordinator: FolderPickerCoordinator?
+    @State private var exportCoordinator: ExportPickerCoordinator?
     @State private var lastBackupURL: URL?
-    @State private var showExporter = false
 
     @State private var alertText = ""
     @State private var showAlert = false
@@ -83,7 +84,7 @@ struct ContentView: View {
 
                     if lastBackupURL != nil {
                         Button("导出到 iCloud 云盘") {
-                            showExporter = true
+                            exportBackup()
                         }
                     }
                 }
@@ -130,17 +131,6 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("备份助手")
-            .sheet(isPresented: $showPicker) {
-                FolderPicker { url in
-                    assignPicked(url)
-                    showPicker = false
-                }
-            }
-            .sheet(isPresented: $showExporter) {
-                if let u = lastBackupURL {
-                    ExportPicker(url: u)
-                }
-            }
             .alert("提示", isPresented: $showAlert) {
                 Button("好") {}
             } message: {
@@ -172,12 +162,23 @@ struct ContentView: View {
     // MARK: - Actions
 
     func pick(_ target: PickerTarget) {
-        pickerTarget = target
-        showPicker = true
+        let vc = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder])
+        let coordinator = FolderPickerCoordinator(
+            onPick: { [target] url in
+                self.assignPicked(url, target: target)
+                self.folderCoordinator = nil
+            },
+            onCancel: {
+                self.folderCoordinator = nil
+            }
+        )
+        vc.delegate = coordinator
+        folderCoordinator = coordinator
+        topVC()?.present(vc, animated: true)
     }
 
-    func assignPicked(_ url: URL) {
-        switch pickerTarget {
+    func assignPicked(_ url: URL, target: PickerTarget) {
+        switch target {
         case .backupSource:
             backupSource = url
         case .backupDest:
@@ -186,9 +187,18 @@ struct ContentView: View {
             restoreSource = url
         case .restoreDest:
             restoreDest = url
-        case .none:
-            break
         }
+    }
+
+    func exportBackup() {
+        guard let u = lastBackupURL else { return }
+        let vc = UIDocumentPickerViewController(forExporting: [u], asCopy: true)
+        let coordinator = ExportPickerCoordinator(onDone: {
+            self.exportCoordinator = nil
+        })
+        vc.delegate = coordinator
+        exportCoordinator = coordinator
+        topVC()?.present(vc, animated: true)
     }
 
     func startBackup() {
