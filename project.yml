@@ -25,19 +25,18 @@ targets:
       INFOPLIST_KEY_UIFileSharingEnabled: "YES"
       INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: "YES"
 
-  # v7.0：分享扩展，让"备份助手"出现在系统分享菜单中
+  # v7.1：分享扩展，让"备份助手"出现在系统分享菜单中
   ShareExtension:
     type: app-extension
     platform: iOS
-    bundleId: com.quseqi.backup.BackupApp.ShareExtension
     sources:
       - path: App/ShareExtension
         excludes:
           - Info.plist
           - "*.entitlements"
-    info:
-      path: App/ShareExtension/Info.plist
     entitlements:
       path: App/ShareExtension/ShareExtension.entitlements
     settings:
       GENERATE_INFOPLIST_FILE: "NO"
+      INFOPLIST_FILE: "App/ShareExtension/Info.plist"
+      PRODUCT_BUNDLE_IDENTIFIER: "com.quseqi.backup.BackupApp.ShareExtension"
