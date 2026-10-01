@@ -231,7 +231,7 @@ func inflateRawDeflate(_ data: Data) -> Data? {
     }
 }
 
-/// v19.4: FileHandle 顺序读 + 逐文件解压，大文件不爆内存（不用 compression_stream，新 SDK 坑多）
+/// v21: 用中央目录解析（标准做法），支持 data descriptor 的 zip（如系统"压缩"生成的）
 /// - Parameters:
 ///   - progress: (已解压文件数, 当前文件名) 回调用
 func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void)? = nil) throws {
@@ -243,73 +243,90 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void
     }
     defer { try? fh.close() }
 
-    func readExactly(_ n: Int) throws -> Data {
-        let d = fh.readData(ofLength: n)
-        guard d.count == n else { throw ZipError.truncatedFile }
-        return d
-    }
+    let fileSize = (try? fm.attributesOfItem(atPath: zipURL.path)[.size] as? Int) ?? 0
+    guard fileSize >= 22 else { throw ZipError.badHeader }
+
     func readU16(_ d: Data, at o: Int) -> UInt16 {
         d.withUnsafeBytes { $0.load(fromByteOffset: o, as: UInt16.self) }.littleEndian
     }
     func readU32(_ d: Data, at o: Int) -> UInt32 {
         d.withUnsafeBytes { $0.load(fromByteOffset: o, as: UInt32.self) }.littleEndian
     }
+    func readAt(_ offset: Int, _ n: Int) throws -> Data {
+        try fh.seek(toOffset: UInt64(offset))
+        let d = fh.readData(ofLength: n)
+        guard d.count == n else { throw ZipError.truncatedFile }
+        return d
+    }
 
+    // 1. 找 EOCD（文件尾 64KB 内搜 0x06054b50）
+    let tailSize = min(fileSize, 65557 + 22)
+    let tail = try readAt(fileSize - tailSize, tailSize)
+    var eocdOffsetInTail: Int? = nil
+    var i = tail.count - 22
+    while i >= 0 {
+        if readU32(tail, at: i) == 0x06054b50 { eocdOffsetInTail = i; break }
+        i -= 1
+    }
+    guard let eocdRel = eocdOffsetInTail else { throw ZipError.truncatedFile }
+    let cdCount = Int(readU16(tail, at: eocdRel + 10))
+    let cdOffset = Int(readU32(tail, at: eocdRel + 16))
+    guard cdCount > 0 else { throw ZipError.invalidZip }
+
+    // 2. 逐条读中央目录
     var extracted = 0
-    while true {
-        // 读本地文件头（至少 30 字节，不够就结束）
-        let header = fh.readData(ofLength: 30)
-        if header.count == 0 { break }  // 正常结束
-        guard header.count == 30 else { throw ZipError.truncatedFile }
-        let sig = readU32(header, at: 0)
-        if sig == 0x02014b50 || sig == 0x06054b50 { break } // 中央目录/结尾
-        guard sig == 0x04034b50 else {
-            // 第一个头就不对 = 根本不是 zip；中间不对 = 截断后错位
-            throw extracted == 0 ? ZipError.badHeader : ZipError.truncatedFile
-        }
+    var cdPos = cdOffset
+    for _ in 0..<cdCount {
+        let h = try readAt(cdPos, 46)
+        guard readU32(h, at: 0) == 0x02014b50 else { throw ZipError.invalidZip }
+        let method = readU16(h, at: 10)
+        let compSize = Int(readU32(h, at: 20))
+        let nameLen = Int(readU16(h, at: 28))
+        let extraLen = Int(readU16(h, at: 30))
+        let commentLen = Int(readU16(h, at: 32))
+        let localOffset = Int(readU32(h, at: 42))
+        cdPos += 46
+        let nameData = try readAt(cdPos, nameLen)
+        cdPos += nameLen + extraLen + commentLen
+        guard let name = String(data: nameData, encoding: .utf8) else { continue }
 
-        let method = readU16(header, at: 8)
-        let compSize = Int(readU32(header, at: 18))
-        let nameLen = Int(readU16(header, at: 26))
-        let extraLen = Int(readU16(header, at: 28))
-
-        let nameData = try readExactly(nameLen)
-        guard let name = String(data: nameData, encoding: .utf8) else { throw ZipError.truncatedFile }
-        if extraLen > 0 { _ = try readExactly(extraLen) }
-
-        // 安全：防止 ../ 穿透
         let safeName = name.replacingOccurrences(of: "..", with: "_")
         let outURL = destDir.appendingPathComponent(safeName)
-
         if safeName.hasSuffix("/") {
             try fm.createDirectory(at: outURL, withIntermediateDirectories: true)
-        } else {
-            try fm.createDirectory(at: outURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if method == 0 {
-                // stored：分块拷贝
-                if fm.fileExists(atPath: outURL.path) { try? fm.removeItem(at: outURL) }
-                fm.createFile(atPath: outURL.path, contents: nil)
-                guard let outFH = try? FileHandle(forWritingTo: outURL) else {
-                    throw ZipError.ioError("无法创建输出文件")
-                }
-                defer { try? outFH.close() }
-                var remaining = compSize
-                while remaining > 0 {
-                    let want = min(remaining, 1 << 20)  // 1MB 块
-                    let chunk = fh.readData(ofLength: want)
-                    guard chunk.count == want else { throw ZipError.truncatedFile }
-                    outFH.write(chunk)
-                    remaining -= want
-                }
-            } else if method == 8 {
-                // v19.4: 单个文件读出来解（已验证的 inflateRawDeflate），不一次性加载整个 zip
-                let compData = try readExactly(compSize)
-                guard let inflated = inflateRawDeflate(compData) else { throw ZipError.unsupportedMethod }
-                if fm.fileExists(atPath: outURL.path) { try? fm.removeItem(at: outURL) }
-                try inflated.write(to: outURL)
-            } else {
-                throw ZipError.unsupportedMethod
+            continue
+        }
+        // 3. 跳到本地头，算出数据起始位置
+        let lh = try readAt(localOffset, 30)
+        guard readU32(lh, at: 0) == 0x04034b50 else { throw ZipError.invalidZip }
+        let lhNameLen = Int(readU16(lh, at: 26))
+        let lhExtraLen = Int(readU16(lh, at: 28))
+        let dataStart = localOffset + 30 + lhNameLen + lhExtraLen
+
+        try fm.createDirectory(at: outURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if fm.fileExists(atPath: outURL.path) { try? fm.removeItem(at: outURL) }
+        if method == 0 {
+            // stored：分块拷贝
+            fm.createFile(atPath: outURL.path, contents: nil)
+            guard let outFH = try? FileHandle(forWritingTo: outURL) else {
+                throw ZipError.ioError("无法创建输出文件")
             }
+            defer { try? outFH.close() }
+            try fh.seek(toOffset: UInt64(dataStart))
+            var remaining = compSize
+            while remaining > 0 {
+                let want = min(remaining, 1 << 20)
+                let chunk = fh.readData(ofLength: want)
+                guard chunk.count == want else { throw ZipError.truncatedFile }
+                outFH.write(chunk)
+                remaining -= want
+            }
+        } else if method == 8 {
+            let compData = try readAt(dataStart, compSize)
+            guard let inflated = inflateRawDeflate(compData) else { throw ZipError.unsupportedMethod }
+            try inflated.write(to: outURL)
+        } else {
+            throw ZipError.unsupportedMethod
         }
         extracted += 1
         progress?(extracted, (safeName as NSString).lastPathComponent)
