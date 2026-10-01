@@ -655,18 +655,18 @@ struct UnzipDestView: View {
 }
 
 
-// MARK: - v31: 捷径解压（带目的地：LiveContainer / 微信）
+// MARK: - v31: 捷径解压（两个固定目的地，各调各的捷径，只传文件名）
 extension ContentView {
     func runUnzipShortcut(zipName: String, dest: String) {
-        let name = "备份助手解压".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        // 传 "文件名|目的地"，捷径里按 | 切分
-        let raw = "\(zipName)|\(dest)"
-        let text = raw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        // v33: 简化——LiveContainer 和微信各一个捷径，不用拆分不用判断
+        let shortcutName = dest == "微信" ? "备份助手解压到微信" : "备份助手解压到LC"
+        let name = shortcutName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let text = zipName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let urlStr = "shortcuts://run-shortcut?name=\(name)&input=text&text=\(text)"
         if let url = URL(string: urlStr), UIApplication.shared.canOpenURL(url) {
             UIApplication.shared.open(url)
         } else {
-            alertText = "没找到“备份助手解压”快捷指令，先在捷径 App 里创建"
+            alertText = "没找到“\(shortcutName)”快捷指令，先在捷径 App 里创建"
             showAlert = true
         }
     }
@@ -772,7 +772,7 @@ struct ShortcutUnzipPicker: View {
                         Button("重选 zip") { selectedZip = nil }.font(.footnote)
                     }
                     Section {
-                        Text("需要“备份助手解压”快捷指令：接收文本 → 按 | 切出文件名和目的地 → 获取文件 → 解压缩 → 存到对应位置。")
+                        Text("需要两个快捷指令：“备份助手解压到LC”（存到我的iPhone/LiveContainer）和“备份助手解压到微信”（存到我的iPhone/微信）。每个都是：接收文本 → 获取文件（备份助手/输入）→ 解压缩 → 保存到固定位置。")
                             .font(.footnote).foregroundColor(.secondary)
                     }
                 }
