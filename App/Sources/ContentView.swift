@@ -95,8 +95,6 @@ struct ContentView: View {
     @State private var showShortcutPicker = false
     // v31: 捷径解压缩选 zip
     @State private var showShortcutUnzipPicker = false
-    // v31: 捷径解压缩选 zip
-    @State private var showShortcutUnzipPicker = false
     @StateObject private var manager = BackupManager()
 
     // 恢复
@@ -201,17 +199,6 @@ struct ContentView: View {
                             Image(systemName: "chevron.right").foregroundColor(.secondary).font(.footnote)
                         }
                     }
-                    // v31: 捷径解压（系统权限，可写 LiveContainer/微信）
-                    Button {
-                        showShortcutUnzipPicker = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "bolt.fill").foregroundColor(.orange)
-                            Text("捷径解压到 LiveContainer/微信").foregroundColor(.primary).font(.headline)
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundColor(.secondary).font(.footnote)
-                        }
-                    }
 
                     if backupZips.isEmpty {
                         Text("还没有选过 zip，点上面“选择 zip 文件”")
@@ -262,13 +249,6 @@ struct ContentView: View {
                     ShortcutUnzipPicker(zips: backupZips, onPick: { url, dest in
                         showShortcutUnzipPicker = false
                         runUnzipShortcut(zipName: url.lastPathComponent, dest: dest)
-                    }, onCancel: { showShortcutUnzipPicker = false })
-                }
-                // v31: 捷径解压选 zip
-                .sheet(isPresented: $showShortcutUnzipPicker) {
-                    ShortcutZipPicker(zips: backupZips, title: "选一个 zip 用捷径解压", onPick: { url in
-                        showShortcutUnzipPicker = false
-                        runUnzipShortcut(zipName: url.lastPathComponent)
                     }, onCancel: { showShortcutUnzipPicker = false })
                 }
 
@@ -674,21 +654,6 @@ struct UnzipDestView: View {
     }
 }
 
-
-// MARK: - v31: 捷径解压
-extension ContentView {
-    func runUnzipShortcut(zipName: String) {
-        let name = "备份助手解压".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        let text = zipName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        let urlStr = "shortcuts://run-shortcut?name=\(name)&input=text&text=\(text)"
-        if let url = URL(string: urlStr), UIApplication.shared.canOpenURL(url) {
-            UIApplication.shared.open(url)
-        } else {
-            alertText = "没找到“备份助手解压”快捷指令，先在捷径 App 里创建"
-            showAlert = true
-        }
-    }
-}
 
 // MARK: - v31: 捷径解压（带目的地：LiveContainer / 微信）
 extension ContentView {
