@@ -217,7 +217,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v21").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v22").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -376,8 +376,9 @@ struct UnzipDestView: View {
     // v9.4: 选目标后先确认，让"自己选择"更明确，不直接解压
     @State private var confirmDest: URL?
     @State private var showConfirm = false
-    // v19: 剪贴板路径
+    // v19: 剪贴板路径；v22: 存 URL，解压时 startUnzip 会拿 security-scoped 访问
     @State private var clipboardPath: String?
+    @State private var clipboardURL: URL?
 
     func choose(_ dest: URL) {
         confirmDest = dest
@@ -412,7 +413,11 @@ struct UnzipDestView: View {
                     // v19: 剪贴板有路径就显示，问用户要不要解压到那
                     if let cp = clipboardPath {
                         Button {
-                            choose(URL(fileURLWithPath: cp, isDirectory: true))
+                            if let u = clipboardURL {
+                                choose(u)
+                            } else {
+                                choose(URL(fileURLWithPath: cp, isDirectory: true))
+                            }
                         } label: {
                             HStack {
                                 Image(systemName: "doc.on.clipboard").foregroundColor(.orange)
@@ -446,7 +451,7 @@ struct UnzipDestView: View {
                     }
                 }
                 Section {
-                    Text("要恢复到其他 App 的文件夹（如 LiveContainer）：去“文件”App 长按这个 zip → 共享 → 备份助手，解压后选位置保存，同名会提示覆盖。")
+                    Text("恢复到 LiveContainer 等外部文件夹：先去“文件”App 长按目标文件夹→拷贝，再回来这里选 zip，会多出“解压到剪贴板路径”选项，有同名直接覆盖。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
@@ -463,18 +468,29 @@ struct UnzipDestView: View {
         }
     }
 
-    // v19: 剪贴板有路径就读出来（文件 App 里复制文件夹后粘贴板会有路径）
+    // v22: 文件 App 里长按文件夹→拷贝，粘贴板会有 security-scoped 的文件 URL
+    // 验证时临时 startAccessing，否则外部路径 fileExists 直接返回 false；
+    // 真正解压时 startUnzip 会再拿一次访问
     func checkClipboardPath() {
+        clipboardURL = nil
+        clipboardPath = nil
+
         let pb = UIPasteboard.general
-        // 先看有没有文件 URL
-        if let urls = pb.urls, let first = urls.first {
-            var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: first.path, isDirectory: &isDir), isDir.boolValue {
-                clipboardPath = first.path
-                return
+        if let urls = pb.urls {
+            for url in urls {
+                let accessing = url.startAccessingSecurityScopedResource()
+                var isDir: ObjCBool = false
+                let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+                let ok = exists && isDir.boolValue
+                if accessing { url.stopAccessingSecurityScopedResource() }
+                if ok {
+                    clipboardURL = url
+                    clipboardPath = url.path
+                    return
+                }
             }
         }
-        // 再看有没有路径文本
+        // 路径文本：只能验证 App 沙盒内的
         if let str = pb.string?.trimmingCharacters(in: .whitespacesAndNewlines),
            !str.isEmpty, str.hasPrefix("/"),
            FileManager.default.fileExists(atPath: str) {
