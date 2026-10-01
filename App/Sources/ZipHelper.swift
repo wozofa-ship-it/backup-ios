@@ -262,7 +262,7 @@ private func streamInflateToFile(fh: FileHandle, compSize: Int, outURL: URL) thr
             stream.src_size = chunk.count
             var flags: Int32 = 0
             // 最后一块数据（含补的尾）给 FINALIZE 标志
-            if isLast { flags = Int32(COMPRESSION_STREAM_FINALIZE.rawValue) }
+            if isLast { flags = COMPRESSION_STREAM_FINALIZE }
             repeat {
                 stream.dst_ptr = outBuf
                 stream.dst_size = outBufSize
