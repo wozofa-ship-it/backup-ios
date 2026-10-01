@@ -233,7 +233,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v14").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v14.1").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -334,6 +334,7 @@ struct ContentView: View {
     }
 
     // v14: 选要备份的文件夹（老式 API，单选），选完直接打包
+    // v14.1: 改 .import 模式，点文件夹行直接选中，不依赖"打开"按钮（.open 模式的"打开"在部分设备无回调）
     func pickBackupFolder() {
         let delegate = FolderPickerDelegate()
         delegate.onPick = { url in
@@ -342,7 +343,7 @@ struct ContentView: View {
             }
         }
         backupPickerDelegate = delegate
-        let picker = UIDocumentPickerViewController(documentTypes: ["public.folder"], in: .open)
+        let picker = UIDocumentPickerViewController(documentTypes: ["public.folder"], in: .import)
         picker.delegate = delegate
         picker.allowsMultipleSelection = false
         picker.modalPresentationStyle = .formSheet
@@ -452,6 +453,7 @@ struct UnzipDestView: View {
     }
 
     // v13: 选任意文件夹当解压目标（老式 API，单选）
+    // 注意：解压目标必须用 .open 模式拿真实路径，.import 会复制一份导致解到复制品里
     func pickFolder() {
         let delegate = FolderPickerDelegate()
         delegate.onPick = { url in
