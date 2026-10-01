@@ -49,6 +49,7 @@ targets:
       - path: App/Sources/CodeLength.swift
       - path: App/Sources/DecodingTree.swift
       - path: App/Sources/SWCExtensions.swift
+      - path: App/Sources/BitByteDataExtensions.swift
     entitlements:
       path: App/ShareExtension/ShareExtension.entitlements
     settings:
