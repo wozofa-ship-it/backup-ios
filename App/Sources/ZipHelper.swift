@@ -202,7 +202,81 @@ func zipDirectory(at src: URL, to zipFile: URL, progress: ((Int, Int, String) ->
     try writeData(end)
 }
 
-// MARK: - 解压：.zip -> 文件夹（支持 stored / deflate）
+// MARK: - 解压：.zip -> 文件夹（流式，支持大文件；支持 stored / deflate）
+
+/// 流式解压单个 deflate 数据块到输出文件
+private func streamInflateToFile(fh: FileHandle, compSize: Int, outURL: URL) throws {
+    let fm = FileManager.default
+    if fm.fileExists(atPath: outURL.path) { try? fm.removeItem(at: outURL) }
+    fm.createFile(atPath: outURL.path, contents: nil)
+    guard let outFH = try? FileHandle(forWritingTo: outURL) else { throw ZipError.ioError("无法创建输出文件") }
+    defer { try? outFH.close() }
+
+    // raw deflate 包一层 zlib 头，用 COMPRESSION_ZLIB 流式解码
+    // 注意：compression_stream 需要完整的 zlib 流（含 Adler32 尾），我们手动补
+    var stream = compression_stream()
+    var status = compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
+    guard status != COMPRESSION_STATUS_ERROR else { throw ZipError.unsupportedMethod }
+    defer { compression_stream_destroy(&stream) }
+
+    let inBufSize = 1 << 16  // 64KB
+    let outBufSize = 1 << 16
+    let inBuf = UnsafeMutablePointer<UInt8>.allocate(capacity: inBufSize)
+    defer { inBuf.deallocate() }
+    let outBuf = UnsafeMutablePointer<UInt8>.allocate(capacity: outBufSize)
+    defer { outBuf.deallocate() }
+
+    var remaining = compSize
+    var firstChunk = true
+    var finished = false
+
+    // zlib 头
+    let zlibHeader: [UInt8] = [0x78, 0x9C]
+
+    while !finished {
+        var chunk: Data
+        if firstChunk {
+            // 第一块：zlib 头 + 尽量多的数据
+            let want = min(remaining, inBufSize - 2)
+            let raw = fh.readData(ofLength: want)
+            if raw.count != want { throw ZipError.invalidZip }
+            remaining -= want
+            var combined = Data(zlibHeader)
+            combined.append(raw)
+            chunk = combined
+            firstChunk = false
+        } else if remaining > 0 {
+            let want = min(remaining, inBufSize)
+            let raw = fh.readData(ofLength: want)
+            if raw.count != want { throw ZipError.invalidZip }
+            remaining -= want
+            chunk = raw
+        } else {
+            // 数据读完，补 Adler32 占位尾（4字节0），让 zlib 流正常结束
+            chunk = Data([0, 0, 0, 0])
+        }
+
+        let isLast = (remaining == 0)
+        chunk.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) in
+            stream.src_ptr = ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            stream.src_size = chunk.count
+            var flags: Int32 = 0
+            // 最后一块数据（含补的尾）给 FINALIZE 标志
+            if isLast { flags = Int32(COMPRESSION_STREAM_FINALIZE.rawValue) }
+            repeat {
+                stream.dst_ptr = outBuf
+                stream.dst_size = outBufSize
+                status = compression_stream_process(&stream, flags)
+                let produced = outBufSize - stream.dst_size
+                if produced > 0 {
+                    outFH.write(Data(bytes: outBuf, count: produced))
+                }
+            } while stream.dst_size == 0 && status == COMPRESSION_STATUS_OK
+        }
+        if isLast { finished = true }
+        if status == COMPRESSION_STATUS_ERROR { throw ZipError.unsupportedMethod }
+    }
+}
 
 func inflateRawDeflate(_ data: Data) -> Data? {
     if data.isEmpty { return Data() }
@@ -227,52 +301,81 @@ func inflateRawDeflate(_ data: Data) -> Data? {
     }
 }
 
-func unzipFile(at zipURL: URL, to destDir: URL) throws {
+/// v19: 流式解压，大文件不爆内存
+/// - Parameters:
+///   - progress: (已解压文件数, 当前文件名) 回调用
+func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void)? = nil) throws {
     let fm = FileManager.default
-    let data = try Data(contentsOf: zipURL)
     try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
 
-    var offset = 0
+    guard let fh = try? FileHandle(forReadingFrom: zipURL) else {
+        throw ZipError.ioError("打不开 zip 文件")
+    }
+    defer { try? fh.close() }
+
+    func readExactly(_ n: Int) throws -> Data {
+        let d = fh.readData(ofLength: n)
+        guard d.count == n else { throw ZipError.invalidZip }
+        return d
+    }
+    func readU16(_ d: Data, at o: Int) -> UInt16 {
+        d.withUnsafeBytes { $0.load(fromByteOffset: o, as: UInt16.self) }.littleEndian
+    }
+    func readU32(_ d: Data, at o: Int) -> UInt32 {
+        d.withUnsafeBytes { $0.load(fromByteOffset: o, as: UInt32.self) }.littleEndian
+    }
+
     var extracted = 0
-    while offset + 30 <= data.count {
-        let sig = readU32(data, at: offset)
+    while true {
+        // 读本地文件头（至少 30 字节，不够就结束）
+        let header = fh.readData(ofLength: 30)
+        if header.count == 0 { break }  // 正常结束
+        guard header.count == 30 else { throw ZipError.invalidZip }
+        let sig = readU32(header, at: 0)
         if sig == 0x02014b50 || sig == 0x06054b50 { break } // 中央目录/结尾
         guard sig == 0x04034b50 else { throw ZipError.invalidZip }
 
-        let method = readU16(data, at: offset + 8)
-        let compSize = Int(readU32(data, at: offset + 18))
-        let nameLen = Int(readU16(data, at: offset + 26))
-        let extraLen = Int(readU16(data, at: offset + 28))
-        let nameStart = offset + 30
-        guard nameStart + nameLen <= data.count else { throw ZipError.invalidZip }
-        let nameData = data.subdata(in: nameStart..<(nameStart + nameLen))
-        guard let name = String(data: nameData, encoding: .utf8) else { throw ZipError.invalidZip }
-        let dataStart = nameStart + nameLen + extraLen
-        guard dataStart + compSize <= data.count else { throw ZipError.invalidZip }
-        let compData = data.subdata(in: dataStart..<(dataStart + compSize))
+        let method = readU16(header, at: 8)
+        let compSize = Int(readU32(header, at: 18))
+        let nameLen = Int(readU16(header, at: 26))
+        let extraLen = Int(readU16(header, at: 28))
 
-        let outURL = destDir.appendingPathComponent(name)
-        if name.hasSuffix("/") {
+        let nameData = try readExactly(nameLen)
+        guard let name = String(data: nameData, encoding: .utf8) else { throw ZipError.invalidZip }
+        if extraLen > 0 { _ = try readExactly(extraLen) }
+
+        // 安全：防止 ../ 穿透
+        let safeName = name.replacingOccurrences(of: "..", with: "_")
+        let outURL = destDir.appendingPathComponent(safeName)
+
+        if safeName.hasSuffix("/") {
             try fm.createDirectory(at: outURL, withIntermediateDirectories: true)
         } else {
             try fm.createDirectory(at: outURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let content: Data
             if method == 0 {
-                content = compData
+                // stored：分块拷贝
+                if fm.fileExists(atPath: outURL.path) { try? fm.removeItem(at: outURL) }
+                fm.createFile(atPath: outURL.path, contents: nil)
+                guard let outFH = try? FileHandle(forWritingTo: outURL) else {
+                    throw ZipError.ioError("无法创建输出文件")
+                }
+                defer { try? outFH.close() }
+                var remaining = compSize
+                while remaining > 0 {
+                    let want = min(remaining, 1 << 20)  // 1MB 块
+                    let chunk = fh.readData(ofLength: want)
+                    guard chunk.count == want else { throw ZipError.invalidZip }
+                    outFH.write(chunk)
+                    remaining -= want
+                }
             } else if method == 8 {
-                guard let inflated = inflateRawDeflate(compData) else { throw ZipError.unsupportedMethod }
-                content = inflated
+                try streamInflateToFile(fh: fh, compSize: compSize, outURL: outURL)
             } else {
                 throw ZipError.unsupportedMethod
             }
-            // v16: 目标已存在就先删掉再写（覆盖），避免解压失败
-            if fm.fileExists(atPath: outURL.path) {
-                try? fm.removeItem(at: outURL)
-            }
-            try content.write(to: outURL)
         }
         extracted += 1
-        offset = dataStart + compSize
+        progress?(extracted, (safeName as NSString).lastPathComponent)
     }
     if extracted == 0 { throw ZipError.invalidZip }
 }

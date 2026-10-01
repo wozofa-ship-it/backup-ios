@@ -217,7 +217,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v18").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v19").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -336,14 +336,19 @@ struct ContentView: View {
             let needStop = dest.startAccessingSecurityScopedResource()
             defer { if needStop { dest.stopAccessingSecurityScopedResource() } }
             do {
-                try unzipFile(at: zip, to: dest)
+                // v19: 流式解压，带进度
+                try unzipFile(at: zip, to: dest) { count, name in
+                    DispatchQueue.main.async {
+                        self.manager.status = "正在解压 \(count) 个文件…\(name)"
+                    }
+                }
                 DispatchQueue.main.async {
                     manager.isWorking = false
                     manager.progress = 1
                     manager.status = "解压完成"
                     // v9.4: 恢复也要存记录
                     manager.addRestoreRecord(zipName: zip.lastPathComponent, destName: dest.lastPathComponent)
-                    alertText = "已解压到「\(dest.lastPathComponent)」"
+                    alertText = "已解压到「\(dest.path)」"
                     showAlert = true
                     refresh()
                 }
@@ -371,7 +376,8 @@ struct UnzipDestView: View {
     // v9.4: 选目标后先确认，让"自己选择"更明确，不直接解压
     @State private var confirmDest: URL?
     @State private var showConfirm = false
-    // v13: 文件夹选择器强持有
+    // v19: 剪贴板路径
+    @State private var clipboardPath: String?
 
     func choose(_ dest: URL) {
         confirmDest = dest
@@ -403,6 +409,21 @@ struct UnzipDestView: View {
                     }
                 }
                 Section(header: Text("解压「\(zipURL?.lastPathComponent ?? "")」到…")) {
+                    // v19: 剪贴板有路径就显示，问用户要不要解压到那
+                    if let cp = clipboardPath {
+                        Button {
+                            choose(URL(fileURLWithPath: cp, isDirectory: true))
+                        } label: {
+                            HStack {
+                                Image(systemName: "doc.on.clipboard").foregroundColor(.orange)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("解压到剪贴板路径").foregroundColor(.primary).font(.headline)
+                                    Text(cp).font(.caption).foregroundColor(.secondary).lineLimit(1)
+                                }
+                                Spacer()
+                            }
+                        }
+                    }
                     // v18: 系统文件夹选择器不可用已删；要恢复到其他 App 的位置（如 LiveContainer），
                     // 去文件 App 长按 zip → 共享 → 备份助手，扩展解压后选位置保存（可覆盖）
                     Button {
@@ -432,12 +453,32 @@ struct UnzipDestView: View {
             }
             .navigationTitle("选择解压位置")
             .navigationBarItems(trailing: Button("取消") { onCancel() })
+            .onAppear { checkClipboardPath() }
             .alert("解压到这个文件夹？", isPresented: $showConfirm, presenting: confirmDest) { dest in
                 Button("取消", role: .cancel) {}
                 Button("开始解压") { onPick(dest) }
             } message: { dest in
-                Text("将「\(zipURL?.lastPathComponent ?? "")」解压到「\(dest.lastPathComponent)」")
+                Text("将「\(zipURL?.lastPathComponent ?? "")」解压到「\(dest.path)」")
             }
+        }
+    }
+
+    // v19: 剪贴板有路径就读出来（文件 App 里复制文件夹后粘贴板会有路径）
+    func checkClipboardPath() {
+        let pb = UIPasteboard.general
+        // 先看有没有文件 URL
+        if let urls = pb.urls, let first = urls.first {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: first.path, isDirectory: &isDir), isDir.boolValue {
+                clipboardPath = first.path
+                return
+            }
+        }
+        // 再看有没有路径文本
+        if let str = pb.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !str.isEmpty, str.hasPrefix("/"),
+           FileManager.default.fileExists(atPath: str) {
+            clipboardPath = str
         }
     }
 }
