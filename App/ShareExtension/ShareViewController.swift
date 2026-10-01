@@ -215,7 +215,6 @@ class ShareViewController: UIViewController {
         } else if passthroughCount > 0 && zippedCount == 0 {
             // v11: zip 已在扩展内解压，分享的是解压后的文件夹
             summary = "已解压 \(doneCount) 个 zip 包"
-            summary = "收到 \(doneCount) 个 zip 包（无需压缩）"
         } else {
             summary = "完成：压缩 \(zippedCount) 个，透传 \(passthroughCount) 个"
         }
