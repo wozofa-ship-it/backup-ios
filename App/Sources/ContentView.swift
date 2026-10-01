@@ -252,7 +252,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v28").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v28.1").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -380,7 +380,7 @@ struct ContentView: View {
                             self.manager.progress = Double(done) / Double(total)
                         }
                     }
-                }, shouldCancel: { [weak self] in self?.unzipCancelled ?? false })
+                }, shouldCancel: { self.unzipCancelled })
                 DispatchQueue.main.async {
                     manager.isWorking = false
                     manager.progress = 1
