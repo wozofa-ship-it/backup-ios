@@ -8,6 +8,7 @@ enum ZipError: Error, LocalizedError {
     case truncatedFile   // v20: 文件被截断（压缩时闪退导致的不完整 zip）
     case badHeader       // v20: 文件头不是 zip
     case unsupportedMethod
+    case unsupportedMethodNumber(Int)
     case ioError(String)
 
     var errorDescription: String? {
@@ -18,6 +19,7 @@ enum ZipError: Error, LocalizedError {
         case .truncatedFile: return "zip 文件不完整（压缩时闪退导致），请删掉重新压缩"
         case .badHeader: return "文件头不是 zip 格式，文件已损坏"
         case .unsupportedMethod: return "不支持的压缩方式"
+        case .unsupportedMethodNumber(let m): return "不支持的压缩方式 (method=\(m)，仅支持 stored/deflate)"
         case .ioError(let s): return s
         }
     }
@@ -326,7 +328,7 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void
             guard let inflated = inflateRawDeflate(compData) else { throw ZipError.unsupportedMethod }
             try inflated.write(to: outURL)
         } else {
-            throw ZipError.unsupportedMethod
+            throw ZipError.unsupportedMethodNumber(Int(method))
         }
         extracted += 1
         progress?(extracted, (safeName as NSString).lastPathComponent)
