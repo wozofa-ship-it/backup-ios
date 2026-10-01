@@ -103,24 +103,30 @@ class ShareViewController: UIViewController {
         }
     }
 
-    // v15: 文件夹不再在扩展里压缩，写任务到共享目录，主 App 后台压缩（扩展内存小、会被杀）
+    // v15.1: iOS 不支持 withSecurityScope bookmark，扩展把文件夹拷到共享目录，主 App 从那压缩
     private func queueBackupTask(folderURL: URL) -> Bool {
         let fm = FileManager.default
         guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: "group.com.quseqi.backup.shared") else { return false }
-        let incoming = container.appendingPathComponent("Incoming", isDirectory: true)
-        try? fm.createDirectory(at: incoming, withIntermediateDirectories: true)
+        let queueDir = container.appendingPathComponent("Incoming/BackupQueue", isDirectory: true)
+        try? fm.createDirectory(at: queueDir, withIntermediateDirectories: true)
         let didAccess = folderURL.startAccessingSecurityScopedResource()
         defer { if didAccess { folderURL.stopAccessingSecurityScopedResource() } }
-        guard let bookmark = try? folderURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) else { return false }
-        let task: [String: Any] = [
-            "bookmark": bookmark.base64EncodedString(),
-            "name": folderURL.lastPathComponent,
-            "createdAt": Date().timeIntervalSince1970
-        ]
-        let fname = "task-\(Int(Date().timeIntervalSince1970))-\(Int.random(in: 1000...9999)).json"
-        let dest = incoming.appendingPathComponent(fname)
-        guard let data = try? JSONSerialization.data(withJSONObject: task) else { return false }
-        return fm.createFile(atPath: dest.path, contents: data)
+        var dest = queueDir.appendingPathComponent(folderURL.lastPathComponent, isDirectory: true)
+        var n = 2
+        while fm.fileExists(atPath: dest.path) {
+            dest = queueDir.appendingPathComponent("\(folderURL.lastPathComponent) \(n)", isDirectory: true)
+            n += 1
+        }
+        var coordError: NSError?
+        var copyError: Error?
+        NSFileCoordinator().coordinate(readingItemAt: folderURL, options: [], error: &coordError) { readURL in
+            do {
+                try fm.copyItem(at: readURL, to: dest)
+            } catch {
+                copyError = error
+            }
+        }
+        return copyError == nil && coordError == nil && fm.fileExists(atPath: dest.path)
     }
 
     private func zipAndShare(urls: [URL]) {

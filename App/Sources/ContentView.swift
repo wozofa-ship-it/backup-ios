@@ -38,6 +38,8 @@ func importFromShareExtension(backupRoot: URL) -> Int {
     let docs = documentsDir()
     var count = 0
     for src in items {
+        // v15.1: BackupQueue 是待压缩队列，跳过（由 processBackupTasks 处理）
+        if src.lastPathComponent == "BackupQueue" { continue }
         // zip 包直接进备份目录，其他进 Documents
         let targetDir = src.pathExtension.lowercased() == "zip" ? backupRoot : docs
         var dest = targetDir.appendingPathComponent(src.lastPathComponent)
@@ -233,7 +235,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v15").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v15.1").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -271,50 +273,38 @@ struct ContentView: View {
         processBackupTasks()
     }
 
-    // v15: 读取共享目录里的备份任务，后台逐个压缩
+    // v15.1: 读取共享目录 BackupQueue 里的文件夹，后台逐个压缩（扩展已拷过来，无需 security-scoped）
     @State private var processingTasks = false
     func processBackupTasks() {
         if processingTasks || manager.isWorking { return }
         let fm = FileManager.default
         guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: shareGroupID) else { return }
-        let incoming = container.appendingPathComponent("Incoming", isDirectory: true)
-        guard let items = try? fm.contentsOfDirectory(at: incoming, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return }
-        let tasks = items.filter { $0.lastPathComponent.hasPrefix("task-") && $0.pathExtension == "json" }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        if tasks.isEmpty { return }
+        let queueDir = container.appendingPathComponent("Incoming/BackupQueue", isDirectory: true)
+        guard let items = try? fm.contentsOfDirectory(at: queueDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return }
+        let folders = items.filter {
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: $0.path, isDirectory: &isDir) && isDir.boolValue
+        }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        if folders.isEmpty { return }
         processingTasks = true
         manager.isWorking = true
         manager.progress = 0
         DispatchQueue.global(qos: .userInitiated).async {
             var doneCount = 0
-            for taskFile in tasks {
-                guard let data = try? Data(contentsOf: taskFile),
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let b64 = json["bookmark"] as? String,
-                      let bookmarkData = Data(base64Encoded: b64),
-                      let folderName = json["name"] as? String else {
-                    try? fm.removeItem(at: taskFile)
-                    continue
-                }
-                var isStale = false
-                guard let srcURL = try? URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else {
-                    try? fm.removeItem(at: taskFile)
-                    continue
-                }
-                let needStop = srcURL.startAccessingSecurityScopedResource()
-                defer { if needStop { srcURL.stopAccessingSecurityScopedResource() } }
+            for srcURL in folders {
+                let folderName = srcURL.lastPathComponent
                 let f = DateFormatter()
                 f.dateFormat = "MMdd-HHmm"
                 let zipName = "\(folderName)-\(f.string(from: Date())).zip"
                 let zipURL = documentsDir().appendingPathComponent(zipName)
                 DispatchQueue.main.async {
-                    self.manager.status = "正在备份 \(doneCount + 1)/\(tasks.count)：\(folderName)"
+                    self.manager.status = "正在备份 \(doneCount + 1)/\(folders.count)：\(folderName)"
                 }
                 do {
                     try zipDirectory(at: srcURL, to: zipURL) { done, total, _ in
                         DispatchQueue.main.async {
-                            let base = Double(doneCount) / Double(tasks.count)
-                            let frac = total > 0 ? Double(done) / Double(total) / Double(tasks.count) : 0
+                            let base = Double(doneCount) / Double(folders.count)
+                            let frac = total > 0 ? Double(done) / Double(total) / Double(folders.count) : 0
                             self.manager.progress = base + frac
                         }
                     }
@@ -328,9 +318,9 @@ struct ContentView: View {
                         self.showAlert = true
                     }
                 }
-                try? fm.removeItem(at: taskFile)
+                try? fm.removeItem(at: srcURL)
                 DispatchQueue.main.async {
-                    self.manager.progress = Double(doneCount) / Double(tasks.count)
+                    self.manager.progress = Double(doneCount) / Double(folders.count)
                 }
             }
             DispatchQueue.main.async {
