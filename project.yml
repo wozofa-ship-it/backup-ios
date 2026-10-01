@@ -43,6 +43,10 @@ targets:
       - path: App/Sources/DecompressionAlgorithm.swift
       - path: App/Sources/BitReader.swift
       - path: App/Sources/LsbBitReader.swift
+      - path: App/Sources/ByteReader.swift
+      - path: App/Sources/SignedNumberRepresentation.swift
+      - path: App/Sources/Code.swift
+      - path: App/Sources/CodeLength.swift
     entitlements:
       path: App/ShareExtension/ShareExtension.entitlements
     settings:

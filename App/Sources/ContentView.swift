@@ -217,7 +217,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v25.1").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v25.2").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
