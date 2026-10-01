@@ -224,8 +224,8 @@ func inflateRawDeflate(_ data: Data, uncompSize: Int = 0) -> Data? {
 
 /// v21: 用中央目录解析（标准做法），支持 data descriptor 的 zip（如系统"压缩"生成的）
 /// - Parameters:
-///   - progress: (已解压文件数, 当前文件名) 回调用
-func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void)? = nil) throws {
+///   - progress: (已处理数, 总数, 当前文件名) 回调用
+func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, Int, String) -> Void)? = nil) throws {
     let fm = FileManager.default
     try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
 
@@ -325,11 +325,11 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void
             }
         } catch {
             failed += 1
-            progress?(extracted + failed, "跳过：\((safeName as NSString).lastPathComponent)")
+            progress?(extracted + failed, cdCount, "跳过：\((safeName as NSString).lastPathComponent)")
             continue
         }
         extracted += 1
-        progress?(extracted + failed, (safeName as NSString).lastPathComponent)
+        progress?(extracted + failed, cdCount, (safeName as NSString).lastPathComponent)
     }
     if extracted == 0 && failed == 0 { throw ZipError.invalidZip }
     if failed > 0 { throw ZipError.partialFailure(failed: failed, total: extracted + failed) }

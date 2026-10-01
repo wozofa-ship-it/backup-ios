@@ -227,30 +227,30 @@ class ShareViewController: UIViewController {
         }
 
         let doneCount = zippedCount + passthroughCount
-        // v17: 压缩出来的 zip 尝试自动存共享目录，成功就不弹保存框了
-        // （zip解压出来的文件夹仍走分享菜单让用户选位置）
+        // v26: 压缩完弹双按钮让用户选存哪：本机（备份助手）或 iCloud（分享菜单手动选 iCloud 云盘/Shortcuts）
         if zippedCount > 0 && passthroughCount == 0 {
-            var autoSaved = 0
-            for zipURL in zipURLs {
-                if saveToSharedIncoming(zipURL) { autoSaved += 1 }
-            }
-            if autoSaved == zipURLs.count && autoSaved > 0 {
-                DispatchQueue.main.async {
-                    self.spinner.stopAnimating()
-                    self.spinner.isHidden = true
-                    self.statusLabel.text = "备份完成，共 \(autoSaved) 个\n已存入备份助手，打开 App 查看"
+            let validURLs = zipURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
+            DispatchQueue.main.async {
+                self.spinner.stopAnimating()
+                self.spinner.isHidden = true
+                self.statusLabel.text = "压缩完成，共 \(validURLs.count) 个 zip 包\n请选择保存位置"
+                let alert = UIAlertController(title: "保存备份", message: "存到本机可直接在 App 里恢复；存到 iCloud 请在分享菜单里选“存储到文件”→ iCloud 云盘 → Shortcuts", preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "存到本机", style: .default) { _ in
+                    var saved = 0
+                    for zipURL in validURLs {
+                        if self.saveToSharedIncoming(zipURL) { saved += 1 }
+                    }
+                    self.statusLabel.text = "已存入备份助手（\(saved) 个）\n打开 App 查看"
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("BackupShare", isDirectory: true)
                         try? FileManager.default.removeItem(at: tmp)
                         self.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
                     }
-                }
-                return
-            }
-            // 自动保存失败的走下面分享菜单手动保存
-            let remaining = zipURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
-            DispatchQueue.main.async {
-                self.presentShareSheet(zipURLs: remaining, summary: "压缩完成，共 \(remaining.count) 个 zip 包")
+                })
+                alert.addAction(UIAlertAction(title: "存到 iCloud", style: .default) { _ in
+                    self.presentShareSheet(zipURLs: validURLs, summary: "压缩完成，共 \(validURLs.count) 个 zip 包")
+                })
+                self.present(alert, animated: true)
             }
             return
         }

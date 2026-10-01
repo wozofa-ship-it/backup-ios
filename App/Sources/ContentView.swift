@@ -115,7 +115,7 @@ struct ContentView: View {
                 // MARK: 备份（压缩成 zip）
                 // v17: 回到原版——文件App长按文件夹→共享→备份助手，扩展压好自动存，打开App就能看到
                 Section(header: Text("备份")) {
-                    Text("去“文件”App 长按文件夹 → 共享 → 备份助手，压好自动存入，回来这里直接能看到。")
+                    Text("去“文件”App 长按文件夹 → 共享 → 备份助手，压好后选“存到本机”（App 里直接恢复）或“存到 iCloud”（分享菜单里选 iCloud 云盘 → Shortcuts）。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                     Button("去文件 App") { openFilesApp() }
@@ -126,18 +126,35 @@ struct ContentView: View {
                 // v10: 只留一句话说明，不再放导入按钮（按钮跳文件App后用户直接在那点zip，系统就地解压）
                 Section(header: Text("恢复")) {
                     // v12: 直接选 zip 文件，不用先复制
-                    Button {
-                        pickZipFile()
-                    } label: {
-                        HStack {
-                            Image(systemName: "folder.badge.plus").foregroundColor(.blue)
-                            Text("选择 zip 文件").foregroundColor(.primary).font(.headline)
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundColor(.secondary).font(.footnote)
+                    // v26: 双按钮——本机 / iCloud，快速恢复
+                    HStack(spacing: 12) {
+                        Button {
+                            pickZipFile()
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder.badge.plus").foregroundColor(.blue)
+                                Text("本机 zip").foregroundColor(.primary).font(.headline)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(10)
+                        }
+                        Button {
+                            pickZipFile()
+                        } label: {
+                            HStack {
+                                Image(systemName: "cloud.fill").foregroundColor(.blue)
+                                Text("iCloud zip").foregroundColor(.primary).font(.headline)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(10)
                         }
                     }
 
-                    Text("点上面选个 zip，再选解压到哪个文件夹。")
+                    Text("点上面选个 zip，再选解压到哪个文件夹。iCloud 的在弹出选择器里点“浏览”→ iCloud 云盘 → Shortcuts。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
 
@@ -217,7 +234,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v25.4").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v26").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -336,10 +353,13 @@ struct ContentView: View {
             let needStop = dest.startAccessingSecurityScopedResource()
             defer { if needStop { dest.stopAccessingSecurityScopedResource() } }
             do {
-                // v19: 流式解压，带进度
-                try unzipFile(at: zip, to: dest) { count, name in
+                // v19: 流式解压，带进度；v26: 进度条按总数算
+                try unzipFile(at: zip, to: dest) { done, total, name in
                     DispatchQueue.main.async {
-                        self.manager.status = "正在解压 \(count) 个文件…\(name)"
+                        self.manager.status = "正在解压 \(done)/\(total)…\(name)"
+                        if total > 0 {
+                            self.manager.progress = Double(done) / Double(total)
+                        }
                     }
                 }
                 DispatchQueue.main.async {
