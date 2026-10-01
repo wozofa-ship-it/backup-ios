@@ -252,7 +252,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v28.1").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v29").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -437,10 +437,96 @@ struct UnzipDestView: View {
     // v28: 手动输入路径
     @State private var customPath = ""
     @State private var pathError: String?
+    // v29: 固定常用位置（UserDefaults 存路径）
+    @State private var liveContainerPath: String? = UserDefaults.standard.string(forKey: "fixedPath_LiveContainer")
+    @State private var wechatPath: String? = UserDefaults.standard.string(forKey: "fixedPath_WeChat")
+    @State private var settingTarget: String?  // 正在设置哪个：live / wechat
 
     func choose(_ dest: URL) {
         confirmDest = dest
         showConfirm = true
+    }
+
+    // v29: 固定位置行
+    @ViewBuilder
+    func fixedPathRow(name: String, path: String?, key: String) -> some View {
+        HStack {
+            Button {
+                if let p = path, !p.isEmpty {
+                    var isDir: ObjCBool = false
+                    if FileManager.default.fileExists(atPath: p, isDirectory: &isDir), isDir.boolValue {
+                        choose(URL(fileURLWithPath: p, isDirectory: true))
+                    } else {
+                        pathError = "\(name)路径已失效，请重新设置"
+                    }
+                } else {
+                    // 没设置过，引导设置
+                    settingTarget = key
+                    if let url = readClipboardFolderURL() {
+                        saveFixedPath(key: key, url: url)
+                    } else {
+                        pathError = "剪贴板里没有文件夹，先去文件 App 长按\(name)里的任意文件→拷贝"
+                    }
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "folder.fill").foregroundColor(.blue)
+                    VStack(alignment: .leading) {
+                        Text(name).foregroundColor(.primary)
+                        Text(path ?? "未设置，点我设置").font(.footnote).foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    if path == nil {
+                        Text("设置").font(.footnote).foregroundColor(.blue)
+                    }
+                }
+            }
+            if path != nil {
+                Button {
+                    settingTarget = key
+                    if let url = readClipboardFolderURL() {
+                        saveFixedPath(key: key, url: url)
+                    } else {
+                        pathError = "剪贴板里没有文件夹，先去文件 App 长按该位置里的任意文件→拷贝"
+                    }
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath").font(.footnote)
+                }.buttonStyle(.borderless)
+            }
+        }
+    }
+
+    func readClipboardFolderURL() -> URL? {
+        let pb = UIPasteboard.general
+        if let urls = pb.urls, let u = urls.first {
+            // 如果是文件，取它所在目录
+            var isDir: ObjCBool = false
+            let p = u.path
+            if FileManager.default.fileExists(atPath: p, isDirectory: &isDir) {
+                return isDir.boolValue ? u : u.deletingLastPathComponent()
+            }
+            return u.deletingLastPathComponent()
+        }
+        if let str = pb.string?.trimmingCharacters(in: .whitespacesAndNewlines), !str.isEmpty {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: str, isDirectory: &isDir), isDir.boolValue {
+                return URL(fileURLWithPath: str, isDirectory: true)
+            }
+        }
+        return nil
+    }
+
+    func saveFixedPath(key: String, url: URL) {
+        let p = url.path
+        if key == "live" {
+            UserDefaults.standard.set(p, forKey: "fixedPath_LiveContainer")
+            liveContainerPath = p
+        } else {
+            UserDefaults.standard.set(p, forKey: "fixedPath_WeChat")
+            wechatPath = p
+        }
+        pathError = nil
+        settingTarget = nil
     }
 
     // v18: pickFolder 已删除（系统文件夹选择器不可用），外部恢复走分享扩展
@@ -511,6 +597,13 @@ struct UnzipDestView: View {
                         Text(err).font(.footnote).foregroundColor(.red)
                     }
                     Text("从文件 App 复制文件夹路径后点“粘贴”。注意：其他 App 的沙盒目录可能无权限写入。")
+                        .font(.footnote).foregroundColor(.secondary)
+                }
+                // v29: 固定常用位置
+                Section(header: Text("常用位置")) {
+                    fixedPathRow(name: "我的iPhone ▸ LiveContainer", path: liveContainerPath, key: "live")
+                    fixedPathRow(name: "我的iPhone ▸ 微信", path: wechatPath, key: "wechat")
+                    Text("首次使用点“设置”，去文件 App 长按该位置里任意文件→拷贝，再回来点“从剪贴板设置”。设置一次以后一键直达。")
                         .font(.footnote).foregroundColor(.secondary)
                 }
                 Section(header: Text("解压「\(zipURL?.lastPathComponent ?? "")」到…")) {
