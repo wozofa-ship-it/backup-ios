@@ -441,6 +441,7 @@ struct UnzipDestView: View {
     @State private var liveContainerPath: String? = UserDefaults.standard.string(forKey: "fixedPath_LiveContainer")
     @State private var wechatPath: String? = UserDefaults.standard.string(forKey: "fixedPath_WeChat")
     @State private var settingTarget: String?  // 正在设置哪个：live / wechat
+    @State private var locatePickerDelegate: LocatePickerDelegate?
 
     func choose(_ dest: URL) {
         confirmDest = dest
@@ -481,6 +482,13 @@ struct UnzipDestView: View {
                     }
                 }
             }
+            // v29.1: 用文件选择器定位（最稳，选任意一个文件即可）
+            Button {
+                settingTarget = key
+                locateViaPicker(for: key)
+            } label: {
+                Text(path == nil ? "选文件定位" : "重定位").font(.footnote)
+            }.buttonStyle(.borderless)
             if path != nil {
                 Button {
                     settingTarget = key
@@ -493,6 +501,29 @@ struct UnzipDestView: View {
                     Image(systemName: "arrow.triangle.2.circlepath").font(.footnote)
                 }.buttonStyle(.borderless)
             }
+        }
+    }
+
+    // v29.1: 打开文件选择器，用户进目标位置随便选一个文件，拿它的父目录当固定路径
+    func locateViaPicker(for key: String) {
+        let delegate = LocatePickerDelegate()
+        delegate.onPick = { url in
+            let dir = url.deletingLastPathComponent()
+            DispatchQueue.main.async {
+                self.saveFixedPath(key: key, url: dir)
+            }
+        }
+        locatePickerDelegate = delegate
+        let picker = UIDocumentPickerViewController(documentTypes: ["public.data"], in: .import)
+        picker.delegate = delegate
+        picker.allowsMultipleSelection = false
+        picker.modalPresentationStyle = .formSheet
+        if let root = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first?.windows.first?.rootViewController {
+            var top = root
+            while let p = top.presentedViewController { top = p }
+            top.present(picker, animated: true)
         }
     }
 
@@ -569,6 +600,11 @@ struct UnzipDestView: View {
                     Button {
                         let p = customPath.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !p.isEmpty else { return }
+                        // v29.1: 先校验——必须是 / 开头的真实路径，不能是文件App里显示的名字
+                        guard p.hasPrefix("/") else {
+                            pathError = "这不是系统路径（别粘文件App里显示的名字）。用下面的“常用位置”→“选文件定位”，进 LiveContainer 随便选个文件即可。"
+                            return
+                        }
                         var isDir: ObjCBool = false
                         let exists = FileManager.default.fileExists(atPath: p, isDirectory: &isDir)
                         if exists && isDir.boolValue {
@@ -694,6 +730,15 @@ struct UnzipDestView: View {
             clipboardPath = str
         }
     }
+}
+
+// MARK: - v29.1: 定位用文件选择器 delegate（只拿父目录路径）
+class LocatePickerDelegate: NSObject, UIDocumentPickerDelegate {
+    var onPick: ((URL) -> Void)?
+    func documentPicker(_ controller: UIDocumentPickerController, didPickDocumentsAt urls: [URL]) {
+        if let u = urls.first { onPick?(u) }
+    }
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerController) {}
 }
 
 // MARK: - v27: UIActivityViewController 包装
