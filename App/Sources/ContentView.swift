@@ -735,10 +735,10 @@ struct UnzipDestView: View {
 // MARK: - v29.1: 定位用文件选择器 delegate（只拿父目录路径）
 class LocatePickerDelegate: NSObject, UIDocumentPickerDelegate {
     var onPick: ((URL) -> Void)?
-    func documentPicker(_ controller: UIDocumentPickerController, didPickDocumentsAt urls: [URL]) {
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         if let u = urls.first { onPick?(u) }
     }
-    func documentPickerWasCancelled(_ controller: UIDocumentPickerController) {}
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {}
 }
 
 // MARK: - v27: UIActivityViewController 包装
