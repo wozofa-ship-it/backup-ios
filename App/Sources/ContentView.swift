@@ -233,7 +233,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v14.1").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v15").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -266,6 +266,84 @@ struct ContentView: View {
         if imported > 0 {
             alertText = "已从分享导入 \(imported) 个项目，可直接恢复"
             showAlert = true
+        }
+        // v15: 处理扩展排队的备份任务（后台压缩，进度条显示）
+        processBackupTasks()
+    }
+
+    // v15: 读取共享目录里的备份任务，后台逐个压缩
+    @State private var processingTasks = false
+    func processBackupTasks() {
+        if processingTasks || manager.isWorking { return }
+        let fm = FileManager.default
+        guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: shareGroupID) else { return }
+        let incoming = container.appendingPathComponent("Incoming", isDirectory: true)
+        guard let items = try? fm.contentsOfDirectory(at: incoming, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return }
+        let tasks = items.filter { $0.lastPathComponent.hasPrefix("task-") && $0.pathExtension == "json" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        if tasks.isEmpty { return }
+        processingTasks = true
+        manager.isWorking = true
+        manager.progress = 0
+        DispatchQueue.global(qos: .userInitiated).async {
+            var doneCount = 0
+            for taskFile in tasks {
+                guard let data = try? Data(contentsOf: taskFile),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let b64 = json["bookmark"] as? String,
+                      let bookmarkData = Data(base64Encoded: b64),
+                      let folderName = json["name"] as? String else {
+                    try? fm.removeItem(at: taskFile)
+                    continue
+                }
+                var isStale = false
+                guard let srcURL = try? URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else {
+                    try? fm.removeItem(at: taskFile)
+                    continue
+                }
+                let needStop = srcURL.startAccessingSecurityScopedResource()
+                defer { if needStop { srcURL.stopAccessingSecurityScopedResource() } }
+                let f = DateFormatter()
+                f.dateFormat = "MMdd-HHmm"
+                let zipName = "\(folderName)-\(f.string(from: Date())).zip"
+                let zipURL = documentsDir().appendingPathComponent(zipName)
+                DispatchQueue.main.async {
+                    self.manager.status = "正在备份 \(doneCount + 1)/\(tasks.count)：\(folderName)"
+                }
+                do {
+                    try zipDirectory(at: srcURL, to: zipURL) { done, total, _ in
+                        DispatchQueue.main.async {
+                            let base = Double(doneCount) / Double(tasks.count)
+                            let frac = total > 0 ? Double(done) / Double(total) / Double(tasks.count) : 0
+                            self.manager.progress = base + frac
+                        }
+                    }
+                    doneCount += 1
+                    DispatchQueue.main.async {
+                        self.manager.addRecord(name: zipName, sourceName: folderName, destName: "本机")
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        self.alertText = "「\(folderName)」备份失败：\(error.localizedDescription)"
+                        self.showAlert = true
+                    }
+                }
+                try? fm.removeItem(at: taskFile)
+                DispatchQueue.main.async {
+                    self.manager.progress = Double(doneCount) / Double(tasks.count)
+                }
+            }
+            DispatchQueue.main.async {
+                self.manager.isWorking = false
+                self.manager.progress = 1
+                self.manager.status = "备份完成"
+                self.processingTasks = false
+                if doneCount > 0 {
+                    self.alertText = "后台备份完成，共 \(doneCount) 个，已存到备份助手文件夹"
+                    self.showAlert = true
+                }
+                self.refresh()
+            }
         }
     }
 

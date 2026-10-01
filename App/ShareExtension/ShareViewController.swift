@@ -103,6 +103,26 @@ class ShareViewController: UIViewController {
         }
     }
 
+    // v15: 文件夹不再在扩展里压缩，写任务到共享目录，主 App 后台压缩（扩展内存小、会被杀）
+    private func queueBackupTask(folderURL: URL) -> Bool {
+        let fm = FileManager.default
+        guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: "group.com.quseqi.backup.shared") else { return false }
+        let incoming = container.appendingPathComponent("Incoming", isDirectory: true)
+        try? fm.createDirectory(at: incoming, withIntermediateDirectories: true)
+        let didAccess = folderURL.startAccessingSecurityScopedResource()
+        defer { if didAccess { folderURL.stopAccessingSecurityScopedResource() } }
+        guard let bookmark = try? folderURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) else { return false }
+        let task: [String: Any] = [
+            "bookmark": bookmark.base64EncodedString(),
+            "name": folderURL.lastPathComponent,
+            "createdAt": Date().timeIntervalSince1970
+        ]
+        let fname = "task-\(Int(Date().timeIntervalSince1970))-\(Int.random(in: 1000...9999)).json"
+        let dest = incoming.appendingPathComponent(fname)
+        guard let data = try? JSONSerialization.data(withJSONObject: task) else { return false }
+        return fm.createFile(atPath: dest.path, contents: data)
+    }
+
     private func zipAndShare(urls: [URL]) {
         guard !urls.isEmpty else {
             return fail("读取分享内容失败")
@@ -160,6 +180,16 @@ class ShareViewController: UIViewController {
 
             var isDir: ObjCBool = false
             _ = fm.fileExists(atPath: url.path, isDirectory: &isDir)
+            // v15: 文件夹直接排队，不在扩展里压缩
+            if isDir.boolValue {
+                if queueBackupTask(folderURL: url) {
+                    zippedCount += 1
+                    DispatchQueue.main.async {
+                        self.statusLabel.text = "已加入备份队列 \(zippedCount)/\(urls.count)\n打开 App 自动压缩"
+                    }
+                }
+                continue
+            }
             let zipName = "\(url.deletingPathExtension().lastPathComponent)-\(dateStr).zip"
             let zipURL = tmp.appendingPathComponent(zipName)
 
@@ -209,6 +239,19 @@ class ShareViewController: UIViewController {
         }
 
         let doneCount = zippedCount + passthroughCount
+        // v15: 文件夹是排队模式，没有 zipURLs，直接提示+关闭，不弹保存框
+        if zippedCount > 0 && zipURLs.isEmpty && passthroughCount == 0 {
+            DispatchQueue.main.async {
+                self.spinner.stopAnimating()
+                self.spinner.isHidden = true
+                self.statusLabel.text = "已加入备份队列，共 \(zippedCount) 个文件夹\n打开“备份助手”App 自动压缩，可看进度"
+                // 1.5 秒后自动关闭
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    self.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
+                }
+            }
+            return
+        }
         let summary: String
         if zippedCount > 0 && passthroughCount == 0 {
             summary = "压缩完成，共 \(doneCount) 个 zip 包"
