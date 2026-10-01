@@ -214,17 +214,19 @@ private func streamInflateToFile(fh: FileHandle, compSize: Int, outURL: URL) thr
 
     // raw deflate 包一层 zlib 头，用 COMPRESSION_ZLIB 流式解码
     // 注意：compression_stream 需要完整的 zlib 流（含 Adler32 尾），我们手动补
-    var stream = compression_stream()
-    var status = compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
-    guard status != COMPRESSION_STATUS_ERROR else { throw ZipError.unsupportedMethod }
-    defer { compression_stream_destroy(&stream) }
-
     let inBufSize = 1 << 16  // 64KB
     let outBufSize = 1 << 16
     let inBuf = UnsafeMutablePointer<UInt8>.allocate(capacity: inBufSize)
     defer { inBuf.deallocate() }
     let outBuf = UnsafeMutablePointer<UInt8>.allocate(capacity: outBufSize)
     defer { outBuf.deallocate() }
+
+    var stream = compression_stream(dst_ptr: outBuf, dst_size: 0,
+                                    src_ptr: UnsafePointer(inBuf), src_size: 0,
+                                    state: nil)
+    var status = compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
+    guard status != COMPRESSION_STATUS_ERROR else { throw ZipError.unsupportedMethod }
+    defer { compression_stream_destroy(&stream) }
 
     var remaining = compSize
     var firstChunk = true
