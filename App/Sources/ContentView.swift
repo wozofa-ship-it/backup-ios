@@ -118,43 +118,44 @@ struct ContentView: View {
                     Text("去“文件”App 长按文件夹 → 共享 → 备份助手，压好后选“存到本机”（App 里直接恢复）或“存到 iCloud”（分享菜单里选 iCloud 云盘 → Shortcuts）。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
-                    Button("去文件 App") { openFilesApp() }
-                        .font(.footnote)
+                    HStack {
+                        Button("去文件 App") { openFilesApp() }
+                            .font(.footnote)
+                        Spacer()
+                        // v27: 一键分享本机 zip，手动存到 iCloud 云盘/Shortcuts
+                        Button {
+                            showICloudShare = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "cloud.fill")
+                                Text("备份到 iCloud")
+                            }.font(.footnote)
+                        }
+                        .disabled(backupZips.isEmpty)
+                    }
+                    if backupZips.isEmpty {
+                        Text("本机还没有 zip，先去文件 App 分享一个文件夹过来。")
+                            .font(.footnote).foregroundColor(.secondary)
+                    }
                 }
 
                 // MARK: 恢复（解压 zip）
                 // v10: 只留一句话说明，不再放导入按钮（按钮跳文件App后用户直接在那点zip，系统就地解压）
                 Section(header: Text("恢复")) {
                     // v12: 直接选 zip 文件，不用先复制
-                    // v26: 双按钮——本机 / iCloud，快速恢复
-                    HStack(spacing: 12) {
-                        Button {
-                            pickZipFile()
-                        } label: {
-                            HStack {
-                                Image(systemName: "folder.badge.plus").foregroundColor(.blue)
-                                Text("本机 zip").foregroundColor(.primary).font(.headline)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(Color(.systemGray6))
-                            .cornerRadius(10)
-                        }
-                        Button {
-                            pickZipFile()
-                        } label: {
-                            HStack {
-                                Image(systemName: "cloud.fill").foregroundColor(.blue)
-                                Text("iCloud zip").foregroundColor(.primary).font(.headline)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(Color(.systemGray6))
-                            .cornerRadius(10)
+                    // v27: 改回单个按钮（v26 双按钮容易误解；选择器里本来就能进 iCloud 云盘）
+                    Button {
+                        pickZipFile()
+                    } label: {
+                        HStack {
+                            Image(systemName: "folder.badge.plus").foregroundColor(.blue)
+                            Text("选择 zip 文件").foregroundColor(.primary).font(.headline)
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundColor(.secondary).font(.footnote)
                         }
                     }
 
-                    Text("点上面选个 zip，再选解压到哪个文件夹。iCloud 的在弹出选择器里点“浏览”→ iCloud 云盘 → Shortcuts。")
+                    Text("点上面选个 zip，再选解压到哪个文件夹。选择器里点“浏览”可进 iCloud 云盘。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
 
@@ -190,6 +191,10 @@ struct ContentView: View {
                         },
                         onCancel: { showUnzipDestPicker = false }
                     )
+                }
+                // v27: 备份到 iCloud 分享表
+                .sheet(isPresented: $showICloudShare) {
+                    ShareSheet(items: backupZips)
                 }
 
                 // MARK: 记录
@@ -234,7 +239,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v26").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v27").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -412,6 +417,8 @@ struct UnzipDestView: View {
     // v19: 剪贴板路径；v22: 存 URL，解压时 startUnzip 会拿 security-scoped 访问
     @State private var clipboardPath: String?
     @State private var clipboardURL: URL?
+    // v27: 备份到 iCloud 分享表
+    @State private var showICloudShare = false
 
     func choose(_ dest: URL) {
         confirmDest = dest
@@ -530,4 +537,14 @@ struct UnzipDestView: View {
             clipboardPath = str
         }
     }
+}
+
+// MARK: - v27: UIActivityViewController 包装
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [URL]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        return vc
+    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
