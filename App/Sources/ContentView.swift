@@ -106,8 +106,6 @@ struct ContentView: View {
     @State private var showAlert = false
     // v12: 选择器强持有（防止 delegate 被释放导致无回调）
     @State private var zipPickerDelegate: ZipPickerDelegate?
-    // v14: 备份文件夹选择器强持有
-    @State private var backupPickerDelegate: FolderPickerDelegate?
 
 
     var body: some View {
@@ -123,21 +121,13 @@ struct ContentView: View {
                 }
 
                 // MARK: 备份（压缩成 zip）
-                // v14: 用文件夹选择器选目录，一点就打包存到备份助手文件夹
+                // v16: 系统文件夹选择器在部分设备上"打开"无回调，已删掉；走分享扩展备份
                 Section(header: Text("备份")) {
-                    Button {
-                        pickBackupFolder()
-                    } label: {
-                        HStack {
-                            Image(systemName: "folder.badge.plus").foregroundColor(.blue)
-                            Text("选择要备份的文件夹").foregroundColor(.primary).font(.headline)
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundColor(.secondary).font(.footnote)
-                        }
-                    }
-                    Text("选个文件夹，自动打包成 zip 存到备份助手文件夹。")
+                    Text("去“文件”App 长按文件夹 → 共享 → 备份助手，1 秒就排好队，回来这里自动后台压缩，能看进度。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
+                    Button("去文件 App") { openFilesApp() }
+                        .font(.footnote)
                 }
 
                 // MARK: 恢复（解压 zip）
@@ -235,7 +225,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v15.1").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v16").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -401,68 +391,10 @@ struct ContentView: View {
         }
     }
 
-    // v14: 选要备份的文件夹（老式 API，单选），选完直接打包
-    // v14.1: 改 .import 模式，点文件夹行直接选中，不依赖"打开"按钮（.open 模式的"打开"在部分设备无回调）
-    func pickBackupFolder() {
-        let delegate = FolderPickerDelegate()
-        delegate.onPick = { url in
-            DispatchQueue.main.async {
-                self.startBackup(from: url)
-            }
-        }
-        backupPickerDelegate = delegate
-        let picker = UIDocumentPickerViewController(documentTypes: ["public.folder"], in: .import)
-        picker.delegate = delegate
-        picker.allowsMultipleSelection = false
-        picker.modalPresentationStyle = .formSheet
-        if let root = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .flatMap({ $0.windows })
-            .first(where: { $0.isKeyWindow })?.rootViewController {
-            var top = root
-            while let p = top.presentedViewController { top = p }
-            top.present(picker, animated: true)
-        }
-    }
+    // v16: pickBackupFolder 已删除（系统选择器不可用），备份走分享扩展排队
 
     // v14: 把选中的文件夹打包成 zip 存到备份助手文件夹
-    func startBackup(from src: URL) {
-        let f = DateFormatter()
-        f.dateFormat = "MMdd-HHmm"
-        let zipName = "\(src.lastPathComponent)-\(f.string(from: Date())).zip"
-        manager.isWorking = true
-        manager.progress = 0
-        manager.status = "正在备份…"
-        DispatchQueue.global(qos: .userInitiated).async {
-            let needStop = src.startAccessingSecurityScopedResource()
-            defer { if needStop { src.stopAccessingSecurityScopedResource() } }
-            do {
-                let zipURL = documentsDir().appendingPathComponent(zipName)
-                try zipDirectory(at: src, to: zipURL) { done, total, name in
-                    DispatchQueue.main.async {
-                        self.manager.progress = total > 0 ? Double(done) / Double(total) : 0
-                        self.manager.status = "正在备份 \(done)/\(total)"
-                    }
-                }
-                DispatchQueue.main.async {
-                    self.manager.isWorking = false
-                    self.manager.progress = 1
-                    self.manager.status = "备份完成"
-                    self.manager.addRecord(name: zipName, sourceName: src.lastPathComponent, destName: "本机")
-                    self.alertText = "「\(zipName)」\n已存到备份助手文件夹"
-                    self.showAlert = true
-                    self.refresh()
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.manager.isWorking = false
-                    self.manager.status = "失败"
-                    self.alertText = "备份失败：\(error.localizedDescription)"
-                    self.showAlert = true
-                }
-            }
-        }
-    }
+    // v16: startBackup 已删除（备份走分享扩展排队）
 
     // v9.2: 系统选择器诊断函数已删除（确认不可用），改走分享扩展导入
 

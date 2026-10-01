@@ -265,6 +265,10 @@ func unzipFile(at zipURL: URL, to destDir: URL) throws {
             } else {
                 throw ZipError.unsupportedMethod
             }
+            // v16: 目标已存在就先删掉再写（覆盖），避免解压失败
+            if fm.fileExists(atPath: outURL.path) {
+                try? fm.removeItem(at: outURL)
+            }
             try content.write(to: outURL)
         }
         extracted += 1
