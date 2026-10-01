@@ -1,16 +1,6 @@
 import SwiftUI
 import UIKit
 
-func defaultBackupName(for folderName: String? = nil) -> String {
-    let f = DateFormatter()
-    f.dateFormat = "MMdd-HHmm"
-    let dateStr = f.string(from: Date())
-    if let name = folderName, !name.isEmpty {
-        return "\(name)-\(dateStr)"
-    }
-    return "备份-" + dateStr
-}
-
 func documentsDir() -> URL {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 }
@@ -83,22 +73,8 @@ func topVC() -> UIViewController? {
 // v9.2: 系统选择器已确认在此设备上不可用（v1.5/v3.0/v3.1/v9.1 四种写法：fileImporter、多选、单选+独立窗口、单选+常规弹出，
 // 点"打开"均无响应，delegate 不触发）。改走"文件App分享到备份助手"扩展导入，不再保留诊断代码。
 
-// 检查剪贴板是否有文件 URL（iOS 不允许直接读取，只能检测到）
-func pasteboardHasFiles() -> Bool {
-    let pb = UIPasteboard.general
-    return pb.hasURLs || pb.hasStrings
-}
-
 struct ContentView: View {
     @StateObject private var manager = BackupManager()
-
-    // 备份
-    @State private var backupName: String = defaultBackupName()
-    @State private var sourceFolders: [URL] = []
-    @State private var pendingSource: URL?
-    @State private var showBackupConfirm = false
-    @State private var lastBackupURL: URL?
-    @State private var lastBackupSource: URL?
 
     // 恢复
     @State private var backupZips: [URL] = []
@@ -108,74 +84,11 @@ struct ContentView: View {
     @State private var alertText = ""
     @State private var showAlert = false
 
-    // 剪贴板提示
-    @State private var showPasteboardHint = false
-    // v9.0: 备份完成弹窗（保存位置+分享+清理三合一）
-    @State private var showBackupDone = false
-    @State private var backupDoneText = ""
-
 
     var body: some View {
         NavigationView {
             List {
-                // 剪贴板提示条
-                if showPasteboardHint {
-                    Section {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("📋 检测到剪贴板有内容")
-                                .font(.headline)
-                            Text("iOS 不允许 App 直接读取剪贴板的文件。请去“文件”App，把拷贝的内容粘贴到“备份助手”文件夹，回来这里会自动识别。")
-                                .font(.footnote)
-                                .foregroundColor(.secondary)
-                            Button("去“文件”App 粘贴") { openFilesApp() }
-                                .font(.subheadline)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-
-                // MARK: 备份（压缩成 zip）
-                // v10: 只留核心流程
-                Section(header: Text("备份")) {
-                    Text("把要备份的文件夹拷进“备份助手”文件夹（在文件 App 里操作），回来点下面开始压缩。")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                    Button("去文件 App") { openFilesApp() }
-                        .font(.footnote)
-
-                    if sourceFolders.isEmpty {
-                        Text("还没有文件夹：去文件 App 把文件夹拷进“备份助手”，回来自动出现")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(sourceFolders, id: \.path) { url in
-                            Button {
-                                pendingSource = url
-                                // 智能默认名：文件夹名+日期
-                                backupName = defaultBackupName(for: url.lastPathComponent)
-                                showBackupConfirm = true
-                            } label: {
-                                HStack {
-                                    Image(systemName: "folder.fill").foregroundColor(.blue)
-                                    Text(url.lastPathComponent).foregroundColor(.primary)
-                                    Spacer()
-                                    Image(systemName: "chevron.right").foregroundColor(.secondary).font(.footnote)
-                                }
-                            }
-                        }
-                    }
-
-                    if let done = lastBackupURL {
-                        Button("分享备份文件（存到 iCloud 云盘）") { shareURL(done) }
-                            .font(.headline)
-                    }
-                }
-                .alert("压缩备份这个文件夹？", isPresented: $showBackupConfirm, presenting: pendingSource) { url in
-                    Button("取消", role: .cancel) {}
-                    Button("开始压缩备份") { startZipBackup(from: url) }
-                } message: { url in
-                    Text("将把「\(url.lastPathComponent)」打包成 .zip 存到本机。")
-                }
+                // v11: 备份功能已去掉，只留恢复
 
                 if manager.isWorking || !manager.status.isEmpty {
                     Section {
@@ -227,7 +140,7 @@ struct ContentView: View {
 
                 // MARK: 记录
                 // v9.5: refresh() 已自动给无记录 zip 建档，这里只显示正式记录
-                Section(header: Text("备份记录")) {
+                Section(header: Text("恢复记录")) {
                     if manager.records.isEmpty {
                         Text("暂无记录：完成一次备份/恢复后这里会显示")
                             .font(.footnote).foregroundColor(.secondary)
@@ -267,31 +180,18 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v10").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v11").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
             .onAppear {
                 refresh()
-                checkPasteboard()
             }
-            // v6.0：回到前台自动刷新 + 检查剪贴板
+            // v6.0：回到前台自动刷新
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 refresh()
-                checkPasteboard()
             }
             .alert("提示", isPresented: $showAlert) { Button("好") {} } message: { Text(alertText) }
-            // v9.0: 备份完成弹窗——明确保存位置，可分享，可清理源文件夹
-            .alert("备份完成", isPresented: $showBackupDone, presenting: lastBackupSource) { src in
-                Button("分享到 iCloud") { if let u = lastBackupURL { shareURL(u) } }
-                Button("删除源文件夹", role: .destructive) {
-                    try? FileManager.default.removeItem(at: src)
-                    refresh()
-                }
-                Button("保留", role: .cancel) {}
-            } message: { _ in
-                Text(backupDoneText)
-            }
         }
     }
 
@@ -300,7 +200,6 @@ struct ContentView: View {
     func refresh() {
         // v7.0：先把分享扩展导入的内容搬进来
         let imported = importFromShareExtension(backupRoot: manager.localBackupRoot())
-        sourceFolders = listFolders(in: documentsDir(), excluding: ["备份"])
         // v9.0: 备份/子目录和Documents根目录的zip都列出来（扩展存过来的也在根目录）
         let allZips = listZips(in: manager.localBackupRoot()) + listZips(in: documentsDir())
         backupZips = allZips.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
@@ -312,7 +211,7 @@ struct ContentView: View {
             manager.ensureRecordForZip(name: zip.lastPathComponent, fileDate: mdate)
         }
         if imported > 0 {
-            alertText = "已从分享导入 \(imported) 个项目，可直接备份/恢复"
+            alertText = "已从分享导入 \(imported) 个项目，可直接恢复"
             showAlert = true
         }
     }
@@ -330,11 +229,6 @@ struct ContentView: View {
         return f.string(fromByteCount: size)
     }
 
-    func checkPasteboard() {
-        // 只在没有文件夹时提示，避免打扰
-        showPasteboardHint = pasteboardHasFiles() && sourceFolders.isEmpty
-    }
-
     func formatDate(_ d: Date) -> String {
         let f = DateFormatter()
         f.dateFormat = "MM-dd HH:mm"
@@ -349,43 +243,7 @@ struct ContentView: View {
 
     // v9.2: 系统选择器诊断函数已删除（确认不可用），改走分享扩展导入
 
-    func startZipBackup(from src: URL) {
-        let name = backupName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let finalName = name.isEmpty ? defaultBackupName(for: src.lastPathComponent) : name
-        manager.isWorking = true
-        manager.progress = 0
-        manager.status = "正在压缩…"
-        showPasteboardHint = false
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                let zipURL = manager.localBackupRoot().appendingPathComponent(finalName + ".zip")
-                if FileManager.default.fileExists(atPath: zipURL.path) {
-                    try FileManager.default.removeItem(at: zipURL)
-                }
-                try zipDirectory(at: src, to: zipURL)
-                DispatchQueue.main.async {
-                    manager.isWorking = false
-                    manager.progress = 1
-                    manager.status = "压缩完成"
-                    manager.addRecord(name: finalName + ".zip", sourceName: src.lastPathComponent, destName: "本机")
-                    lastBackupURL = zipURL
-                    lastBackupSource = src
-                    backupName = defaultBackupName()
-                    refresh()
-                    // v9.0: 备份完成弹窗，明确告诉用户zip存哪了
-                    backupDoneText = "「\(finalName).zip」\n已保存到 备份助手/备份/\n\n在“文件”App的备份助手文件夹中可以找到。"
-                    showBackupDone = true
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    manager.isWorking = false
-                    manager.status = "失败"
-                    alertText = "压缩失败：\(error.localizedDescription)"
-                    showAlert = true
-                }
-            }
-        }
-    }
+    // v11: 备份功能已去掉，startZipBackup 删除
 
     func startUnzip(zip: URL, to dest: URL) {
         manager.isWorking = true
@@ -415,14 +273,7 @@ struct ContentView: View {
         }
     }
 
-    func shareURL(_ url: URL) {
-        let avc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-        if let pop = avc.popoverPresentationController {
-            pop.sourceView = topVC()?.view
-            pop.sourceRect = CGRect(x: 200, y: 200, width: 1, height: 1)
-        }
-        topVC()?.present(avc, animated: true)
-    }
+    // v11: 备份功能已去掉，shareURL 删除
 }
 
 // MARK: - 选择解压目标

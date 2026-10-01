@@ -131,15 +131,28 @@ class ShareViewController: UIViewController {
                 self.statusLabel.text = "正在压缩 \(index + 1)/\(urls.count)\n\(url.lastPathComponent)"
             }
 
-            // zip 包直接透传（提示用户点开即解压）；其他打成zip
+            // v11: zip 包不再透传，直接在扩展里解压，用户选地方存解压后的文件夹
             if url.pathExtension.lowercased() == "zip" {
-                let dest = tmp.appendingPathComponent(url.lastPathComponent)
+                let zipCopy = tmp.appendingPathComponent(url.lastPathComponent)
                 var coordError: NSError?
                 NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
-                    try? fm.copyItem(at: readURL, to: dest)
+                    try? fm.copyItem(at: readURL, to: zipCopy)
                 }
-                if fm.fileExists(atPath: dest.path) {
-                    zipURLs.append(dest)
+                guard fm.fileExists(atPath: zipCopy.path) else { continue }
+                // 解压到以 zip 名命名的文件夹
+                let outName = url.deletingPathExtension().lastPathComponent
+                let outDir = tmp.appendingPathComponent(outName, isDirectory: true)
+                try? fm.removeItem(at: outDir)
+                do {
+                    try unzipFile(at: zipCopy, to: outDir)
+                    try? fm.removeItem(at: zipCopy)
+                    zipURLs.append(outDir)
+                    passthroughCount += 1
+                    DispatchQueue.main.async {
+                        self.statusLabel.text = "已解压「\(url.lastPathComponent)」\n请选择保存位置"
+                    }
+                } catch {
+                    zipURLs.append(zipCopy)
                     passthroughCount += 1
                 }
                 continue
@@ -200,6 +213,8 @@ class ShareViewController: UIViewController {
         if zippedCount > 0 && passthroughCount == 0 {
             summary = "压缩完成，共 \(doneCount) 个 zip 包"
         } else if passthroughCount > 0 && zippedCount == 0 {
+            // v11: zip 已在扩展内解压，分享的是解压后的文件夹
+            summary = "已解压 \(doneCount) 个 zip 包"
             summary = "收到 \(doneCount) 个 zip 包（无需压缩）"
         } else {
             summary = "完成：压缩 \(zippedCount) 个，透传 \(passthroughCount) 个"
