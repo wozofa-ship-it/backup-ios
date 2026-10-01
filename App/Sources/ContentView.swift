@@ -2,6 +2,15 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+// v12: 文件夹选择器（老式 API + 强持有 delegate），解压目标可选任意文件夹
+class FolderPickerDelegate: NSObject, UIDocumentPickerDelegate {
+    var onPick: ((URL) -> Void)?
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        if let url = urls.first { onPick?(url) }
+    }
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {}
+}
+
 // v12: 文件选择器（老式 API + 强持有 delegate）
 class ZipPickerDelegate: NSObject, UIDocumentPickerDelegate {
     var onPick: ((URL) -> Void)?
@@ -204,7 +213,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v12").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v13").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -313,6 +322,9 @@ struct ContentView: View {
         manager.progress = 0
         manager.status = "正在解压…"
         DispatchQueue.global(qos: .userInitiated).async {
+            // v13: 外部选的文件夹需要 security-scoped 访问
+            let needStop = dest.startAccessingSecurityScopedResource()
+            defer { if needStop { dest.stopAccessingSecurityScopedResource() } }
             do {
                 try unzipFile(at: zip, to: dest)
                 DispatchQueue.main.async {
@@ -349,10 +361,35 @@ struct UnzipDestView: View {
     // v9.4: 选目标后先确认，让"自己选择"更明确，不直接解压
     @State private var confirmDest: URL?
     @State private var showConfirm = false
+    // v13: 文件夹选择器强持有
+    @State private var folderPickerDelegate: FolderPickerDelegate?
 
     func choose(_ dest: URL) {
         confirmDest = dest
         showConfirm = true
+    }
+
+    // v13: 选任意文件夹当解压目标（老式 API，单选）
+    func pickFolder() {
+        let delegate = FolderPickerDelegate()
+        delegate.onPick = { url in
+            DispatchQueue.main.async {
+                self.choose(url)
+            }
+        }
+        folderPickerDelegate = delegate
+        let picker = UIDocumentPickerViewController(documentTypes: ["public.folder"], in: .open)
+        picker.delegate = delegate
+        picker.allowsMultipleSelection = false
+        picker.modalPresentationStyle = .formSheet
+        if let root = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow })?.rootViewController {
+            var top = root
+            while let p = top.presentedViewController { top = p }
+            top.present(picker, animated: true)
+        }
     }
 
     var body: some View {
@@ -378,6 +415,16 @@ struct UnzipDestView: View {
                     }
                 }
                 Section(header: Text("解压「\(zipURL?.lastPathComponent ?? "")」到…")) {
+                    // v13: 选任意文件夹
+                    Button {
+                        pickFolder()
+                    } label: {
+                        HStack {
+                            Image(systemName: "folder.badge.plus").foregroundColor(.green)
+                            Text("选择其他文件夹…").foregroundColor(.primary).font(.headline)
+                            Spacer()
+                        }
+                    }
                     Button {
                         choose(documentsDir())
                     } label: {
