@@ -3,13 +3,7 @@ import UIKit
 import UniformTypeIdentifiers
 
 // v12: 文件夹选择器（老式 API + 强持有 delegate），解压目标可选任意文件夹
-class FolderPickerDelegate: NSObject, UIDocumentPickerDelegate {
-    var onPick: ((URL) -> Void)?
-    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        if let url = urls.first { onPick?(url) }
-    }
-    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {}
-}
+// v18: FolderPickerDelegate 已删除（系统文件夹选择器不可用）
 
 // v12: 文件选择器（老式 API + 强持有 delegate）
 class ZipPickerDelegate: NSObject, UIDocumentPickerDelegate {
@@ -223,7 +217,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v17").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v18").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -378,36 +372,13 @@ struct UnzipDestView: View {
     @State private var confirmDest: URL?
     @State private var showConfirm = false
     // v13: 文件夹选择器强持有
-    @State private var folderPickerDelegate: FolderPickerDelegate?
 
     func choose(_ dest: URL) {
         confirmDest = dest
         showConfirm = true
     }
 
-    // v13: 选任意文件夹当解压目标（老式 API，单选）
-    // 注意：解压目标必须用 .open 模式拿真实路径，.import 会复制一份导致解到复制品里
-    func pickFolder() {
-        let delegate = FolderPickerDelegate()
-        delegate.onPick = { url in
-            DispatchQueue.main.async {
-                self.choose(url)
-            }
-        }
-        folderPickerDelegate = delegate
-        let picker = UIDocumentPickerViewController(documentTypes: ["public.folder"], in: .open)
-        picker.delegate = delegate
-        picker.allowsMultipleSelection = false
-        picker.modalPresentationStyle = .formSheet
-        if let root = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .flatMap({ $0.windows })
-            .first(where: { $0.isKeyWindow })?.rootViewController {
-            var top = root
-            while let p = top.presentedViewController { top = p }
-            top.present(picker, animated: true)
-        }
-    }
+    // v18: pickFolder 已删除（系统文件夹选择器不可用），外部恢复走分享扩展
 
     var body: some View {
         NavigationView {
@@ -432,16 +403,8 @@ struct UnzipDestView: View {
                     }
                 }
                 Section(header: Text("解压「\(zipURL?.lastPathComponent ?? "")」到…")) {
-                    // v13: 选任意文件夹
-                    Button {
-                        pickFolder()
-                    } label: {
-                        HStack {
-                            Image(systemName: "folder.badge.plus").foregroundColor(.green)
-                            Text("选择其他文件夹…").foregroundColor(.primary).font(.headline)
-                            Spacer()
-                        }
-                    }
+                    // v18: 系统文件夹选择器不可用已删；要恢复到其他 App 的位置（如 LiveContainer），
+                    // 去文件 App 长按 zip → 共享 → 备份助手，扩展解压后选位置保存（可覆盖）
                     Button {
                         choose(documentsDir())
                     } label: {
@@ -460,6 +423,11 @@ struct UnzipDestView: View {
                             }
                         }
                     }
+                }
+                Section {
+                    Text("要恢复到其他 App 的文件夹（如 LiveContainer）：去“文件”App 长按这个 zip → 共享 → 备份助手，解压后选位置保存，同名会提示覆盖。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                 }
             }
             .navigationTitle("选择解压位置")
