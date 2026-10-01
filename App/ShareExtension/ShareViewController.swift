@@ -103,30 +103,21 @@ class ShareViewController: UIViewController {
         }
     }
 
-    // v15.1: iOS 不支持 withSecurityScope bookmark，扩展把文件夹拷到共享目录，主 App 从那压缩
-    private func queueBackupTask(folderURL: URL) -> Bool {
+    // v17: 回到原版思路——扩展内直接压缩（流式，v8.1验证过），压完自动存共享目录，App自动收
+    // 存共享目录失败则回退到分享菜单手动保存
+    private func saveToSharedIncoming(_ zipURL: URL) -> Bool {
         let fm = FileManager.default
         guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: "group.com.quseqi.backup.shared") else { return false }
-        let queueDir = container.appendingPathComponent("Incoming/BackupQueue", isDirectory: true)
-        try? fm.createDirectory(at: queueDir, withIntermediateDirectories: true)
-        let didAccess = folderURL.startAccessingSecurityScopedResource()
-        defer { if didAccess { folderURL.stopAccessingSecurityScopedResource() } }
-        var dest = queueDir.appendingPathComponent(folderURL.lastPathComponent, isDirectory: true)
+        let incoming = container.appendingPathComponent("Incoming", isDirectory: true)
+        try? fm.createDirectory(at: incoming, withIntermediateDirectories: true)
+        var dest = incoming.appendingPathComponent(zipURL.lastPathComponent)
         var n = 2
         while fm.fileExists(atPath: dest.path) {
-            dest = queueDir.appendingPathComponent("\(folderURL.lastPathComponent) \(n)", isDirectory: true)
+            let base = zipURL.deletingPathExtension().lastPathComponent
+            dest = incoming.appendingPathComponent("\(base) \(n).zip")
             n += 1
         }
-        var coordError: NSError?
-        var copyError: Error?
-        NSFileCoordinator().coordinate(readingItemAt: folderURL, options: [], error: &coordError) { readURL in
-            do {
-                try fm.copyItem(at: readURL, to: dest)
-            } catch {
-                copyError = error
-            }
-        }
-        return copyError == nil && coordError == nil && fm.fileExists(atPath: dest.path)
+        return (try? fm.moveItem(at: zipURL, to: dest)) != nil
     }
 
     private func zipAndShare(urls: [URL]) {
@@ -186,16 +177,7 @@ class ShareViewController: UIViewController {
 
             var isDir: ObjCBool = false
             _ = fm.fileExists(atPath: url.path, isDirectory: &isDir)
-            // v15: 文件夹直接排队，不在扩展里压缩
-            if isDir.boolValue {
-                if queueBackupTask(folderURL: url) {
-                    zippedCount += 1
-                    DispatchQueue.main.async {
-                        self.statusLabel.text = "已加入备份队列 \(zippedCount)/\(urls.count)\n打开 App 自动压缩"
-                    }
-                }
-                continue
-            }
+            // v17: 文件夹在扩展内直接压缩（流式），不再排队复制（大文件夹会卡死扩展）
             let zipName = "\(url.deletingPathExtension().lastPathComponent)-\(dateStr).zip"
             let zipURL = tmp.appendingPathComponent(zipName)
 
@@ -245,16 +227,30 @@ class ShareViewController: UIViewController {
         }
 
         let doneCount = zippedCount + passthroughCount
-        // v15: 文件夹是排队模式，没有 zipURLs，直接提示+关闭，不弹保存框
-        if zippedCount > 0 && zipURLs.isEmpty && passthroughCount == 0 {
-            DispatchQueue.main.async {
-                self.spinner.stopAnimating()
-                self.spinner.isHidden = true
-                self.statusLabel.text = "已加入备份队列，共 \(zippedCount) 个文件夹\n打开“备份助手”App 自动压缩，可看进度"
-                // 1.5 秒后自动关闭
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                    self.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
+        // v17: 压缩出来的 zip 尝试自动存共享目录，成功就不弹保存框了
+        // （zip解压出来的文件夹仍走分享菜单让用户选位置）
+        if zippedCount > 0 && passthroughCount == 0 {
+            var autoSaved = 0
+            for zipURL in zipURLs {
+                if saveToSharedIncoming(zipURL) { autoSaved += 1 }
+            }
+            if autoSaved == zipURLs.count && autoSaved > 0 {
+                DispatchQueue.main.async {
+                    self.spinner.stopAnimating()
+                    self.spinner.isHidden = true
+                    self.statusLabel.text = "备份完成，共 \(autoSaved) 个\n已存入备份助手，打开 App 查看"
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("BackupShare", isDirectory: true)
+                        try? FileManager.default.removeItem(at: tmp)
+                        self.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
+                    }
                 }
+                return
+            }
+            // 自动保存失败的走下面分享菜单手动保存
+            let remaining = zipURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
+            DispatchQueue.main.async {
+                self.presentShareSheet(zipURLs: remaining, summary: "压缩完成，共 \(remaining.count) 个 zip 包")
             }
             return
         }

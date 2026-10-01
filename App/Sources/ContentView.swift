@@ -38,8 +38,6 @@ func importFromShareExtension(backupRoot: URL) -> Int {
     let docs = documentsDir()
     var count = 0
     for src in items {
-        // v15.1: BackupQueue 是待压缩队列，跳过（由 processBackupTasks 处理）
-        if src.lastPathComponent == "BackupQueue" { continue }
         // zip 包直接进备份目录，其他进 Documents
         let targetDir = src.pathExtension.lowercased() == "zip" ? backupRoot : docs
         var dest = targetDir.appendingPathComponent(src.lastPathComponent)
@@ -121,9 +119,9 @@ struct ContentView: View {
                 }
 
                 // MARK: 备份（压缩成 zip）
-                // v16: 系统文件夹选择器在部分设备上"打开"无回调，已删掉；走分享扩展备份
+                // v17: 回到原版——文件App长按文件夹→共享→备份助手，扩展压好自动存，打开App就能看到
                 Section(header: Text("备份")) {
-                    Text("去“文件”App 长按文件夹 → 共享 → 备份助手，1 秒就排好队，回来这里自动后台压缩，能看进度。")
+                    Text("去“文件”App 长按文件夹 → 共享 → 备份助手，压好自动存入，回来这里直接能看到。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                     Button("去文件 App") { openFilesApp() }
@@ -225,7 +223,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v16").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v17").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -259,73 +257,8 @@ struct ContentView: View {
             alertText = "已从分享导入 \(imported) 个项目，可直接恢复"
             showAlert = true
         }
-        // v15: 处理扩展排队的备份任务（后台压缩，进度条显示）
-        processBackupTasks()
     }
 
-    // v15.1: 读取共享目录 BackupQueue 里的文件夹，后台逐个压缩（扩展已拷过来，无需 security-scoped）
-    @State private var processingTasks = false
-    func processBackupTasks() {
-        if processingTasks || manager.isWorking { return }
-        let fm = FileManager.default
-        guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: shareGroupID) else { return }
-        let queueDir = container.appendingPathComponent("Incoming/BackupQueue", isDirectory: true)
-        guard let items = try? fm.contentsOfDirectory(at: queueDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return }
-        let folders = items.filter {
-            var isDir: ObjCBool = false
-            return fm.fileExists(atPath: $0.path, isDirectory: &isDir) && isDir.boolValue
-        }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-        if folders.isEmpty { return }
-        processingTasks = true
-        manager.isWorking = true
-        manager.progress = 0
-        DispatchQueue.global(qos: .userInitiated).async {
-            var doneCount = 0
-            for srcURL in folders {
-                let folderName = srcURL.lastPathComponent
-                let f = DateFormatter()
-                f.dateFormat = "MMdd-HHmm"
-                let zipName = "\(folderName)-\(f.string(from: Date())).zip"
-                let zipURL = documentsDir().appendingPathComponent(zipName)
-                DispatchQueue.main.async {
-                    self.manager.status = "正在备份 \(doneCount + 1)/\(folders.count)：\(folderName)"
-                }
-                do {
-                    try zipDirectory(at: srcURL, to: zipURL) { done, total, _ in
-                        DispatchQueue.main.async {
-                            let base = Double(doneCount) / Double(folders.count)
-                            let frac = total > 0 ? Double(done) / Double(total) / Double(folders.count) : 0
-                            self.manager.progress = base + frac
-                        }
-                    }
-                    doneCount += 1
-                    DispatchQueue.main.async {
-                        self.manager.addRecord(name: zipName, sourceName: folderName, destName: "本机")
-                    }
-                } catch {
-                    DispatchQueue.main.async {
-                        self.alertText = "「\(folderName)」备份失败：\(error.localizedDescription)"
-                        self.showAlert = true
-                    }
-                }
-                try? fm.removeItem(at: srcURL)
-                DispatchQueue.main.async {
-                    self.manager.progress = Double(doneCount) / Double(folders.count)
-                }
-            }
-            DispatchQueue.main.async {
-                self.manager.isWorking = false
-                self.manager.progress = 1
-                self.manager.status = "备份完成"
-                self.processingTasks = false
-                if doneCount > 0 {
-                    self.alertText = "后台备份完成，共 \(doneCount) 个，已存到备份助手文件夹"
-                    self.showAlert = true
-                }
-                self.refresh()
-            }
-        }
-    }
 
     // v9.0: 显示zip所在位置
     func zipLocation(_ url: URL) -> String {
