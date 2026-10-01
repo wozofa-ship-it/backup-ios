@@ -9,6 +9,7 @@ enum ZipError: Error, LocalizedError {
     case badHeader       // v20: 文件头不是 zip
     case unsupportedMethod
     case unsupportedMethodNumber(Int)
+    case partialFailure(failed: Int, total: Int)  // v25: 部分文件失败，其余已解出
     case ioError(String)
 
     var errorDescription: String? {
@@ -20,6 +21,7 @@ enum ZipError: Error, LocalizedError {
         case .badHeader: return "文件头不是 zip 格式，文件已损坏"
         case .unsupportedMethod: return "不支持的压缩方式"
         case .unsupportedMethodNumber(let m): return "不支持的压缩方式 (method=\(m)，仅支持 stored/deflate)"
+        case .partialFailure(let f, let t): return "解压完成 \(t - f)/\(t) 个文件，\(f) 个失败（已跳过）"
         case .ioError(let s): return s
         }
     }
@@ -210,27 +212,13 @@ func zipDirectory(at src: URL, to zipFile: URL, progress: ((Int, Int, String) ->
 
 // MARK: - 解压：.zip -> 文件夹（流式，支持大文件；支持 stored / deflate）
 
+/// v25: 用 SWCompression 的纯 Swift Deflate 解码器（MIT），不依赖系统 API hack
 func inflateRawDeflate(_ data: Data, uncompSize: Int = 0) -> Data? {
     if data.isEmpty { return Data() }
-    // 包一层 zlib 头尾，用系统解码（Adler32 用占位，多数实现不强校验）
-    var wrapped = Data([0x78, 0x9C])
-    wrapped.append(data)
-    wrapped.append(contentsOf: [0, 0, 0, 0])
-    // v24: 用中央目录里的真实解压大小，不再猜 4 倍（高压缩比文件会爆）
-    let dstCapacity = uncompSize > 0 ? uncompSize : max(data.count * 4, 1024)
-
-    return wrapped.withUnsafeBytes { (srcPtr: UnsafeRawBufferPointer) -> Data? in
-        guard let srcBase = srcPtr.baseAddress else { return nil }
-        let dst = UnsafeMutablePointer<UInt8>.allocate(capacity: dstCapacity)
-        defer { dst.deallocate() }
-        let scratchSize = compression_decode_scratch_buffer_size(COMPRESSION_ZLIB)
-        let scratch = UnsafeMutablePointer<UInt8>.allocate(capacity: scratchSize)
-        defer { scratch.deallocate() }
-        let decoded = compression_decode_buffer(dst, dstCapacity,
-                                                srcBase.assumingMemoryBound(to: UInt8.self),
-                                                wrapped.count, nil, COMPRESSION_ZLIB)
-        guard decoded > 0 else { return nil }
-        return Data(bytes: dst, count: decoded)
+    do {
+        return try Deflate.decompress(data: data)
+    } catch {
+        return nil
     }
 }
 
@@ -278,6 +266,7 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void
 
     // 2. 逐条读中央目录
     var extracted = 0
+    var failed = 0
     var cdPos = cdOffset
     for _ in 0..<cdCount {
         let h = try readAt(cdPos, 46)
@@ -309,31 +298,39 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void
 
         try fm.createDirectory(at: outURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         if fm.fileExists(atPath: outURL.path) { try? fm.removeItem(at: outURL) }
-        if method == 0 {
-            // stored：分块拷贝
-            fm.createFile(atPath: outURL.path, contents: nil)
-            guard let outFH = try? FileHandle(forWritingTo: outURL) else {
-                throw ZipError.ioError("无法创建输出文件")
+        // v25: 单个文件失败只跳过不中断，全部跑完再报部分失败
+        do {
+            if method == 0 {
+                // stored：分块拷贝
+                fm.createFile(atPath: outURL.path, contents: nil)
+                guard let outFH = try? FileHandle(forWritingTo: outURL) else {
+                    throw ZipError.ioError("无法创建输出文件")
+                }
+                defer { try? outFH.close() }
+                try fh.seek(toOffset: UInt64(dataStart))
+                var remaining = compSize
+                while remaining > 0 {
+                    let want = min(remaining, 1 << 20)
+                    let chunk = fh.readData(ofLength: want)
+                    guard chunk.count == want else { throw ZipError.truncatedFile }
+                    outFH.write(chunk)
+                    remaining -= want
+                }
+            } else if method == 8 {
+                let compData = try readAt(dataStart, compSize)
+                guard let inflated = inflateRawDeflate(compData, uncompSize: uncompSize) else { throw ZipError.unsupportedMethod }
+                try inflated.write(to: outURL)
+            } else {
+                throw ZipError.unsupportedMethodNumber(Int(method))
             }
-            defer { try? outFH.close() }
-            try fh.seek(toOffset: UInt64(dataStart))
-            var remaining = compSize
-            while remaining > 0 {
-                let want = min(remaining, 1 << 20)
-                let chunk = fh.readData(ofLength: want)
-                guard chunk.count == want else { throw ZipError.truncatedFile }
-                outFH.write(chunk)
-                remaining -= want
-            }
-        } else if method == 8 {
-            let compData = try readAt(dataStart, compSize)
-            guard let inflated = inflateRawDeflate(compData, uncompSize: uncompSize) else { throw ZipError.unsupportedMethod }
-            try inflated.write(to: outURL)
-        } else {
-            throw ZipError.unsupportedMethodNumber(Int(method))
+        } catch {
+            failed += 1
+            progress?(extracted + failed, "跳过：\((safeName as NSString).lastPathComponent)")
+            continue
         }
         extracted += 1
-        progress?(extracted, (safeName as NSString).lastPathComponent)
+        progress?(extracted + failed, (safeName as NSString).lastPathComponent)
     }
-    if extracted == 0 { throw ZipError.invalidZip }
+    if extracted == 0 && failed == 0 { throw ZipError.invalidZip }
+    if failed > 0 { throw ZipError.partialFailure(failed: failed, total: extracted + failed) }
 }

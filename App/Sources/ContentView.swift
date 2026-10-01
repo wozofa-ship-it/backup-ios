@@ -217,7 +217,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v24").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v25").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -353,11 +353,24 @@ struct ContentView: View {
                     refresh()
                 }
             } catch {
+                // v25: 部分成功也算成功，记恢复记录
+                let isPartial = (error as? ZipError).map {
+                    if case .partialFailure = $0 { return true }
+                    return false
+                } ?? false
                 DispatchQueue.main.async {
                     manager.isWorking = false
-                    manager.status = "失败"
-                    alertText = "解压失败：\(error.localizedDescription)"
+                    if isPartial {
+                        manager.progress = 1
+                        manager.status = "部分解压完成"
+                        manager.addRestoreRecord(zipName: zip.lastPathComponent, destName: dest.lastPathComponent)
+                        alertText = "\(error.localizedDescription)，已解压到「\(dest.path)」"
+                    } else {
+                        manager.status = "失败"
+                        alertText = "解压失败：\(error.localizedDescription)"
+                    }
                     showAlert = true
+                    refresh()
                 }
             }
         }
