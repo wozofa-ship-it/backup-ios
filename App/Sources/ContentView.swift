@@ -89,6 +89,8 @@ func topVC() -> UIViewController? {
 struct ContentView: View {
     // v27: 备份到 iCloud 分享表
     @State private var showICloudShare = false
+    // v28: 解压取消
+    @State private var unzipCancelled = false
     @StateObject private var manager = BackupManager()
 
     // 恢复
@@ -110,7 +112,16 @@ struct ContentView: View {
                 if manager.isWorking || !manager.status.isEmpty {
                     Section {
                         ProgressView(value: manager.progress)
-                        Text(manager.status).font(.footnote).foregroundColor(.secondary)
+                        HStack {
+                            Text(manager.status).font(.footnote).foregroundColor(.secondary)
+                            Spacer()
+                            // v28: 解压停止按钮
+                            if manager.isWorking {
+                                Button("停止") { unzipCancelled = true }
+                                    .font(.footnote)
+                                    .foregroundColor(.red)
+                            }
+                        }
                     }
                 }
 
@@ -241,7 +252,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v27.1").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v28").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -355,20 +366,21 @@ struct ContentView: View {
         manager.isWorking = true
         manager.progress = 0
         manager.status = "正在解压…"
+        unzipCancelled = false
         DispatchQueue.global(qos: .userInitiated).async {
             // v13: 外部选的文件夹需要 security-scoped 访问
             let needStop = dest.startAccessingSecurityScopedResource()
             defer { if needStop { dest.stopAccessingSecurityScopedResource() } }
             do {
-                // v19: 流式解压，带进度；v26: 进度条按总数算
-                try unzipFile(at: zip, to: dest) { done, total, name in
+                // v19: 流式解压，带进度；v26: 进度条按总数算；v28: 支持取消
+                try unzipFile(at: zip, to: dest, progress: { done, total, name in
                     DispatchQueue.main.async {
                         self.manager.status = "正在解压 \(done)/\(total)…\(name)"
                         if total > 0 {
                             self.manager.progress = Double(done) / Double(total)
                         }
                     }
-                }
+                }, shouldCancel: { [weak self] in self?.unzipCancelled ?? false })
                 DispatchQueue.main.async {
                     manager.isWorking = false
                     manager.progress = 1
@@ -392,6 +404,9 @@ struct ContentView: View {
                         manager.status = "部分解压完成"
                         manager.addRestoreRecord(zipName: zip.lastPathComponent, destName: dest.lastPathComponent)
                         alertText = "\(error.localizedDescription)，已解压到「\(dest.path)」"
+                    } else if unzipCancelled {
+                        manager.status = "已取消"
+                        alertText = "已取消解压"
                     } else {
                         manager.status = "失败"
                         alertText = "解压失败：\(error.localizedDescription)"
@@ -419,6 +434,9 @@ struct UnzipDestView: View {
     // v19: 剪贴板路径；v22: 存 URL，解压时 startUnzip 会拿 security-scoped 访问
     @State private var clipboardPath: String?
     @State private var clipboardURL: URL?
+    // v28: 手动输入路径
+    @State private var customPath = ""
+    @State private var pathError: String?
 
     func choose(_ dest: URL) {
         confirmDest = dest
@@ -448,6 +466,52 @@ struct UnzipDestView: View {
                             choose(dest)
                         }
                     }
+                }
+                // v28: 手动输入/粘贴目标路径
+                Section(header: Text("指定路径解压")) {
+                    HStack {
+                        TextField("粘贴或输入目标文件夹路径", text: $customPath)
+                            .textFieldStyle(.roundedBorder)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                        Button("粘贴") {
+                            if let str = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines), !str.isEmpty {
+                                customPath = str
+                            }
+                        }.font(.footnote)
+                    }
+                    Button {
+                        let p = customPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !p.isEmpty else { return }
+                        var isDir: ObjCBool = false
+                        let exists = FileManager.default.fileExists(atPath: p, isDirectory: &isDir)
+                        if exists && isDir.boolValue {
+                            pathError = nil
+                            choose(URL(fileURLWithPath: p, isDirectory: true))
+                        } else if !exists {
+                            // 路径不存在，尝试创建（仅 App 沙盒内有效）
+                            do {
+                                try FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)
+                                pathError = nil
+                                choose(URL(fileURLWithPath: p, isDirectory: true))
+                            } catch {
+                                pathError = "无法使用此路径：\(error.localizedDescription)"
+                            }
+                        } else {
+                            pathError = "这不是一个文件夹路径"
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "folder.badge.gearshape").foregroundColor(.orange)
+                            Text("解压到此路径").foregroundColor(.primary).font(.headline)
+                            Spacer()
+                        }
+                    }
+                    if let err = pathError {
+                        Text(err).font(.footnote).foregroundColor(.red)
+                    }
+                    Text("从文件 App 复制文件夹路径后点“粘贴”。注意：其他 App 的沙盒目录可能无权限写入。")
+                        .font(.footnote).foregroundColor(.secondary)
                 }
                 Section(header: Text("解压「\(zipURL?.lastPathComponent ?? "")」到…")) {
                     // v19: 剪贴板有路径就显示，问用户要不要解压到那

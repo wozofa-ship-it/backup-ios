@@ -225,7 +225,8 @@ func inflateRawDeflate(_ data: Data, uncompSize: Int = 0) -> Data? {
 /// v21: 用中央目录解析（标准做法），支持 data descriptor 的 zip（如系统"压缩"生成的）
 /// - Parameters:
 ///   - progress: (已处理数, 总数, 当前文件名) 回调用
-func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, Int, String) -> Void)? = nil) throws {
+///   - shouldCancel: 返回 true 则中断解压
+func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, Int, String) -> Void)? = nil, shouldCancel: (() -> Bool)? = nil) throws {
     let fm = FileManager.default
     try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
 
@@ -269,6 +270,8 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, Int, String) ->
     var failed = 0
     var cdPos = cdOffset
     for _ in 0..<cdCount {
+        // v28: 用户点了停止就中断
+        if shouldCancel?() == true { throw ZipError.ioError("已取消解压") }
         let h = try readAt(cdPos, 46)
         guard readU32(h, at: 0) == 0x02014b50 else { throw ZipError.invalidZip }
         let method = readU16(h, at: 10)
