@@ -3,7 +3,7 @@ name: BackupApp
 options:
   bundleIdPrefix: com.quseqi.backup
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "16.0"
 
 targets:
   BackupApp:

@@ -107,6 +107,11 @@ struct ContentView: View {
     // v12: 选择器强持有（防止 delegate 被释放导致无回调）
     @State private var zipPickerDelegate: ZipPickerDelegate?
 
+    // v34: 可定时备份的文件夹（Documents 下除"备份"外的子文件夹）
+    var schedulableFolders: [URL] {
+        listFolders(in: documentsDir(), excluding: ["备份"])
+    }
+
 
     var body: some View {
         NavigationView {
@@ -165,6 +170,27 @@ struct ContentView: View {
                     }
                     if backupZips.isEmpty {
                         Text("本机还没有 zip，先去文件 App 分享一个文件夹过来。")
+                            .font(.footnote).foregroundColor(.secondary)
+                    }
+                }
+
+                // MARK: v34 定时备份（捷径自动化调用 App 动作）
+                Section(header: Text("定时备份")) {
+                    Text("去“捷径”App → 自动化 → 新建 → 到达时间（选每周/每月）→ 运行“备份助手”的“定时备份文件夹”动作，填下面要备份的文件夹名。到点自动打 zip 存到备份目录。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    ForEach(schedulableFolders, id: \.lastPathComponent) { folder in
+                        HStack {
+                            Image(systemName: "folder").foregroundColor(.blue).font(.footnote)
+                            Text(folder.lastPathComponent).font(.footnote)
+                            Spacer()
+                            Button("复制名称") {
+                                UIPasteboard.general.string = folder.lastPathComponent
+                            }.font(.footnote)
+                        }
+                    }
+                    if schedulableFolders.isEmpty {
+                        Text("备份助手目录里还没有文件夹。")
                             .font(.footnote).foregroundColor(.secondary)
                     }
                 }
@@ -294,7 +320,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v29").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v34").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
