@@ -87,6 +87,8 @@ func topVC() -> UIViewController? {
 // 点"打开"均无响应，delegate 不触发）。改走"文件App分享到备份助手"扩展导入，不再保留诊断代码。
 
 struct ContentView: View {
+    // v27: 备份到 iCloud 分享表
+    @State private var showICloudShare = false
     @StateObject private var manager = BackupManager()
 
     // 恢复
@@ -239,7 +241,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v27").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v27.1").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -417,8 +419,6 @@ struct UnzipDestView: View {
     // v19: 剪贴板路径；v22: 存 URL，解压时 startUnzip 会拿 security-scoped 访问
     @State private var clipboardPath: String?
     @State private var clipboardURL: URL?
-    // v27: 备份到 iCloud 分享表
-    @State private var showICloudShare = false
 
     func choose(_ dest: URL) {
         confirmDest = dest
