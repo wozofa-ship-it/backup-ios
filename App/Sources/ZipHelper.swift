@@ -5,6 +5,8 @@ enum ZipError: Error, LocalizedError {
     case cannotEnumerate
     case emptyDirectory
     case invalidZip
+    case truncatedFile   // v20: 文件被截断（压缩时闪退导致的不完整 zip）
+    case badHeader       // v20: 文件头不是 zip
     case unsupportedMethod
     case ioError(String)
 
@@ -13,6 +15,8 @@ enum ZipError: Error, LocalizedError {
         case .cannotEnumerate: return "无法读取文件夹"
         case .emptyDirectory: return "文件夹是空的"
         case .invalidZip: return "不是有效的 zip 文件"
+        case .truncatedFile: return "zip 文件不完整（压缩时闪退导致），请删掉重新压缩"
+        case .badHeader: return "文件头不是 zip 格式，文件已损坏"
         case .unsupportedMethod: return "不支持的压缩方式"
         case .ioError(let s): return s
         }
@@ -241,7 +245,7 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void
 
     func readExactly(_ n: Int) throws -> Data {
         let d = fh.readData(ofLength: n)
-        guard d.count == n else { throw ZipError.invalidZip }
+        guard d.count == n else { throw ZipError.truncatedFile }
         return d
     }
     func readU16(_ d: Data, at o: Int) -> UInt16 {
@@ -256,10 +260,13 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void
         // 读本地文件头（至少 30 字节，不够就结束）
         let header = fh.readData(ofLength: 30)
         if header.count == 0 { break }  // 正常结束
-        guard header.count == 30 else { throw ZipError.invalidZip }
+        guard header.count == 30 else { throw ZipError.truncatedFile }
         let sig = readU32(header, at: 0)
         if sig == 0x02014b50 || sig == 0x06054b50 { break } // 中央目录/结尾
-        guard sig == 0x04034b50 else { throw ZipError.invalidZip }
+        guard sig == 0x04034b50 else {
+            // 第一个头就不对 = 根本不是 zip；中间不对 = 截断后错位
+            throw extracted == 0 ? ZipError.badHeader : ZipError.truncatedFile
+        }
 
         let method = readU16(header, at: 8)
         let compSize = Int(readU32(header, at: 18))
@@ -267,7 +274,7 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void
         let extraLen = Int(readU16(header, at: 28))
 
         let nameData = try readExactly(nameLen)
-        guard let name = String(data: nameData, encoding: .utf8) else { throw ZipError.invalidZip }
+        guard let name = String(data: nameData, encoding: .utf8) else { throw ZipError.truncatedFile }
         if extraLen > 0 { _ = try readExactly(extraLen) }
 
         // 安全：防止 ../ 穿透
@@ -290,7 +297,7 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void
                 while remaining > 0 {
                     let want = min(remaining, 1 << 20)  // 1MB 块
                     let chunk = fh.readData(ofLength: want)
-                    guard chunk.count == want else { throw ZipError.invalidZip }
+                    guard chunk.count == want else { throw ZipError.truncatedFile }
                     outFH.write(chunk)
                     remaining -= want
                 }
