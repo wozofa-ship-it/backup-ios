@@ -204,82 +204,6 @@ func zipDirectory(at src: URL, to zipFile: URL, progress: ((Int, Int, String) ->
 
 // MARK: - 解压：.zip -> 文件夹（流式，支持大文件；支持 stored / deflate）
 
-/// 流式解压单个 deflate 数据块到输出文件
-private func streamInflateToFile(fh: FileHandle, compSize: Int, outURL: URL) throws {
-    let fm = FileManager.default
-    if fm.fileExists(atPath: outURL.path) { try? fm.removeItem(at: outURL) }
-    fm.createFile(atPath: outURL.path, contents: nil)
-    guard let outFH = try? FileHandle(forWritingTo: outURL) else { throw ZipError.ioError("无法创建输出文件") }
-    defer { try? outFH.close() }
-
-    // raw deflate 包一层 zlib 头，用 COMPRESSION_ZLIB 流式解码
-    // 注意：compression_stream 需要完整的 zlib 流（含 Adler32 尾），我们手动补
-    let inBufSize = 1 << 16  // 64KB
-    let outBufSize = 1 << 16
-    let inBuf = UnsafeMutablePointer<UInt8>.allocate(capacity: inBufSize)
-    defer { inBuf.deallocate() }
-    let outBuf = UnsafeMutablePointer<UInt8>.allocate(capacity: outBufSize)
-    defer { outBuf.deallocate() }
-
-    var stream = compression_stream(dst_ptr: outBuf, dst_size: 0,
-                                    src_ptr: UnsafePointer(inBuf), src_size: 0,
-                                    state: nil)
-    var status = compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
-    guard status != COMPRESSION_STATUS_ERROR else { throw ZipError.unsupportedMethod }
-    defer { compression_stream_destroy(&stream) }
-
-    var remaining = compSize
-    var firstChunk = true
-    var finished = false
-
-    // zlib 头
-    let zlibHeader: [UInt8] = [0x78, 0x9C]
-
-    while !finished {
-        var chunk: Data
-        if firstChunk {
-            // 第一块：zlib 头 + 尽量多的数据
-            let want = min(remaining, inBufSize - 2)
-            let raw = fh.readData(ofLength: want)
-            if raw.count != want { throw ZipError.invalidZip }
-            remaining -= want
-            var combined = Data(zlibHeader)
-            combined.append(raw)
-            chunk = combined
-            firstChunk = false
-        } else if remaining > 0 {
-            let want = min(remaining, inBufSize)
-            let raw = fh.readData(ofLength: want)
-            if raw.count != want { throw ZipError.invalidZip }
-            remaining -= want
-            chunk = raw
-        } else {
-            // 数据读完，补 Adler32 占位尾（4字节0），让 zlib 流正常结束
-            chunk = Data([0, 0, 0, 0])
-        }
-
-        let isLast = (remaining == 0)
-        chunk.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) in
-            stream.src_ptr = ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)
-            stream.src_size = chunk.count
-            var flags = compression_stream_flags()
-            // 最后一块数据（含补的尾）给 FINALIZE 标志
-            if isLast { flags = COMPRESSION_STREAM_FINALIZE }
-            repeat {
-                stream.dst_ptr = outBuf
-                stream.dst_size = outBufSize
-                status = compression_stream_process(&stream, flags)
-                let produced = outBufSize - stream.dst_size
-                if produced > 0 {
-                    outFH.write(Data(bytes: outBuf, count: produced))
-                }
-            } while stream.dst_size == 0 && status == COMPRESSION_STATUS_OK
-        }
-        if isLast { finished = true }
-        if status == COMPRESSION_STATUS_ERROR { throw ZipError.unsupportedMethod }
-    }
-}
-
 func inflateRawDeflate(_ data: Data) -> Data? {
     if data.isEmpty { return Data() }
     // 包一层 zlib 头尾，用系统解码（Adler32 用占位，多数实现不强校验）
@@ -303,7 +227,7 @@ func inflateRawDeflate(_ data: Data) -> Data? {
     }
 }
 
-/// v19: 流式解压，大文件不爆内存
+/// v19.4: FileHandle 顺序读 + 逐文件解压，大文件不爆内存（不用 compression_stream，新 SDK 坑多）
 /// - Parameters:
 ///   - progress: (已解压文件数, 当前文件名) 回调用
 func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void)? = nil) throws {
@@ -371,7 +295,11 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void
                     remaining -= want
                 }
             } else if method == 8 {
-                try streamInflateToFile(fh: fh, compSize: compSize, outURL: outURL)
+                // v19.4: 单个文件读出来解（已验证的 inflateRawDeflate），不一次性加载整个 zip
+                let compData = try readExactly(compSize)
+                guard let inflated = inflateRawDeflate(compData) else { throw ZipError.unsupportedMethod }
+                if fm.fileExists(atPath: outURL.path) { try? fm.removeItem(at: outURL) }
+                try inflated.write(to: outURL)
             } else {
                 throw ZipError.unsupportedMethod
             }
