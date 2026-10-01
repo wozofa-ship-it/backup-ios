@@ -210,13 +210,14 @@ func zipDirectory(at src: URL, to zipFile: URL, progress: ((Int, Int, String) ->
 
 // MARK: - 解压：.zip -> 文件夹（流式，支持大文件；支持 stored / deflate）
 
-func inflateRawDeflate(_ data: Data) -> Data? {
+func inflateRawDeflate(_ data: Data, uncompSize: Int = 0) -> Data? {
     if data.isEmpty { return Data() }
     // 包一层 zlib 头尾，用系统解码（Adler32 用占位，多数实现不强校验）
     var wrapped = Data([0x78, 0x9C])
     wrapped.append(data)
     wrapped.append(contentsOf: [0, 0, 0, 0])
-    let dstCapacity = max(data.count * 4, 1024)
+    // v24: 用中央目录里的真实解压大小，不再猜 4 倍（高压缩比文件会爆）
+    let dstCapacity = uncompSize > 0 ? uncompSize : max(data.count * 4, 1024)
 
     return wrapped.withUnsafeBytes { (srcPtr: UnsafeRawBufferPointer) -> Data? in
         guard let srcBase = srcPtr.baseAddress else { return nil }
@@ -283,6 +284,7 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void
         guard readU32(h, at: 0) == 0x02014b50 else { throw ZipError.invalidZip }
         let method = readU16(h, at: 10)
         let compSize = Int(readU32(h, at: 20))
+        let uncompSize = Int(readU32(h, at: 24))
         let nameLen = Int(readU16(h, at: 28))
         let extraLen = Int(readU16(h, at: 30))
         let commentLen = Int(readU16(h, at: 32))
@@ -325,7 +327,7 @@ func unzipFile(at zipURL: URL, to destDir: URL, progress: ((Int, String) -> Void
             }
         } else if method == 8 {
             let compData = try readAt(dataStart, compSize)
-            guard let inflated = inflateRawDeflate(compData) else { throw ZipError.unsupportedMethod }
+            guard let inflated = inflateRawDeflate(compData, uncompSize: uncompSize) else { throw ZipError.unsupportedMethod }
             try inflated.write(to: outURL)
         } else {
             throw ZipError.unsupportedMethodNumber(Int(method))
