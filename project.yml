@@ -47,6 +47,8 @@ targets:
       - path: App/Sources/SignedNumberRepresentation.swift
       - path: App/Sources/Code.swift
       - path: App/Sources/CodeLength.swift
+      - path: App/Sources/DecodingTree.swift
+      - path: App/Sources/SWCExtensions.swift
     entitlements:
       path: App/ShareExtension/ShareExtension.entitlements
     settings:

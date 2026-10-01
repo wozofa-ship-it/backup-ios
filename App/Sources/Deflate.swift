@@ -184,7 +184,7 @@ public class Deflate: DecompressionAlgorithm {
                         guard bitReader.bitsLeft >= extraLength
                             else { throw DeflateError.symbolNotFound }
 
-                        let length = Constants.lengthBase[nextSymbol - 257] + bitReader.int(fromBits: extraLength)
+                        let length: Int = Constants.lengthBase[nextSymbol - 257] + bitReader.int(fromBits: extraLength)
 
                         // Then we need to get distance code.
                         let distanceCode = mainDistances.findNextSymbol()
@@ -200,7 +200,7 @@ public class Deflate: DecompressionAlgorithm {
                         guard bitReader.bitsLeft >= extraDistance
                             else { throw DeflateError.symbolNotFound }
 
-                        let distance = Constants.distanceBase[distanceCode] + bitReader.int(fromBits: extraDistance)
+                        let distance: Int = Constants.distanceBase[distanceCode] + bitReader.int(fromBits: extraDistance)
 
                         // We should repeat last 'distance' amount of data.
                         // The amount of times we do this is round(length / distance).
