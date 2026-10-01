@@ -95,6 +95,8 @@ struct ContentView: View {
     @State private var showShortcutPicker = false
     // v31: 捷径解压缩选 zip
     @State private var showShortcutUnzipPicker = false
+    // v31: 捷径解压缩选 zip
+    @State private var showShortcutUnzipPicker = false
     @StateObject private var manager = BackupManager()
 
     // 恢复
@@ -199,6 +201,17 @@ struct ContentView: View {
                             Image(systemName: "chevron.right").foregroundColor(.secondary).font(.footnote)
                         }
                     }
+                    // v31: 捷径解压（系统权限，可写 LiveContainer/微信）
+                    Button {
+                        showShortcutUnzipPicker = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "bolt.fill").foregroundColor(.orange)
+                            Text("捷径解压到 LiveContainer/微信").foregroundColor(.primary).font(.headline)
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundColor(.secondary).font(.footnote)
+                        }
+                    }
 
                     if backupZips.isEmpty {
                         Text("还没有选过 zip，点上面“选择 zip 文件”")
@@ -243,6 +256,13 @@ struct ContentView: View {
                         showShortcutPicker = false
                         runBackupShortcut(zipName: url.lastPathComponent)
                     }, onCancel: { showShortcutPicker = false })
+                }
+                // v31: 捷径解压选 zip + 目的地
+                .sheet(isPresented: $showShortcutUnzipPicker) {
+                    ShortcutUnzipPicker(zips: backupZips, onPick: { url, dest in
+                        showShortcutUnzipPicker = false
+                        runUnzipShortcut(zipName: url.lastPathComponent, dest: dest)
+                    }, onCancel: { showShortcutUnzipPicker = false })
                 }
                 // v31: 捷径解压选 zip
                 .sheet(isPresented: $showShortcutUnzipPicker) {
@@ -479,128 +499,15 @@ struct UnzipDestView: View {
     // v28: 手动输入路径
     @State private var customPath = ""
     @State private var pathError: String?
-    // v29: 固定常用位置（UserDefaults 存路径）
-    @State private var liveContainerPath: String? = UserDefaults.standard.string(forKey: "fixedPath_LiveContainer")
-    @State private var wechatPath: String? = UserDefaults.standard.string(forKey: "fixedPath_WeChat")
-    @State private var settingTarget: String?  // 正在设置哪个：live / wechat
-    @State private var locatePickerDelegate: LocatePickerDelegate?
 
     func choose(_ dest: URL) {
         confirmDest = dest
         showConfirm = true
     }
 
-    // v29: 固定位置行
-    @ViewBuilder
-    func fixedPathRow(name: String, path: String?, key: String) -> some View {
-        HStack {
-            Button {
-                if let p = path, !p.isEmpty {
-                    var isDir: ObjCBool = false
-                    if FileManager.default.fileExists(atPath: p, isDirectory: &isDir), isDir.boolValue {
-                        choose(URL(fileURLWithPath: p, isDirectory: true))
-                    } else {
-                        pathError = "\(name)路径已失效，请重新设置"
-                    }
-                } else {
-                    // 没设置过，引导设置
-                    settingTarget = key
-                    if let url = readClipboardFolderURL() {
-                        saveFixedPath(key: key, url: url)
-                    } else {
-                        pathError = "剪贴板里没有文件夹，先去文件 App 长按\(name)里的任意文件→拷贝"
-                    }
-                }
-            } label: {
-                HStack {
-                    Image(systemName: "folder.fill").foregroundColor(.blue)
-                    VStack(alignment: .leading) {
-                        Text(name).foregroundColor(.primary)
-                        Text(path ?? "未设置，点我设置").font(.footnote).foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    if path == nil {
-                        Text("设置").font(.footnote).foregroundColor(.blue)
-                    }
-                }
-            }
-            // v29.1: 用文件选择器定位（最稳，选任意一个文件即可）
-            Button {
-                settingTarget = key
-                locateViaPicker(for: key)
-            } label: {
-                Text(path == nil ? "选文件定位" : "重定位").font(.footnote)
-            }.buttonStyle(.borderless)
-            if path != nil {
-                Button {
-                    settingTarget = key
-                    if let url = readClipboardFolderURL() {
-                        saveFixedPath(key: key, url: url)
-                    } else {
-                        pathError = "剪贴板里没有文件夹，先去文件 App 长按该位置里的任意文件→拷贝"
-                    }
-                } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath").font(.footnote)
-                }.buttonStyle(.borderless)
-            }
-        }
-    }
 
-    // v29.1: 打开文件选择器，用户进目标位置随便选一个文件，拿它的父目录当固定路径
-    func locateViaPicker(for key: String) {
-        let delegate = LocatePickerDelegate()
-        delegate.onPick = { url in
-            let dir = url.deletingLastPathComponent()
-            DispatchQueue.main.async {
-                self.saveFixedPath(key: key, url: dir)
-            }
-        }
-        locatePickerDelegate = delegate
-        let picker = UIDocumentPickerViewController(documentTypes: ["public.data"], in: .import)
-        picker.delegate = delegate
-        picker.allowsMultipleSelection = false
-        picker.modalPresentationStyle = .formSheet
-        if let root = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first?.windows.first?.rootViewController {
-            var top = root
-            while let p = top.presentedViewController { top = p }
-            top.present(picker, animated: true)
-        }
-    }
 
-    func readClipboardFolderURL() -> URL? {
-        let pb = UIPasteboard.general
-        if let urls = pb.urls, let u = urls.first {
-            // 如果是文件，取它所在目录
-            var isDir: ObjCBool = false
-            let p = u.path
-            if FileManager.default.fileExists(atPath: p, isDirectory: &isDir) {
-                return isDir.boolValue ? u : u.deletingLastPathComponent()
-            }
-            return u.deletingLastPathComponent()
-        }
-        if let str = pb.string?.trimmingCharacters(in: .whitespacesAndNewlines), !str.isEmpty {
-            var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: str, isDirectory: &isDir), isDir.boolValue {
-                return URL(fileURLWithPath: str, isDirectory: true)
-            }
-        }
-        return nil
-    }
 
-    func saveFixedPath(key: String, url: URL) {
-        let p = url.path
-        if key == "live" {
-            UserDefaults.standard.set(p, forKey: "fixedPath_LiveContainer")
-            liveContainerPath = p
-        } else {
-            UserDefaults.standard.set(p, forKey: "fixedPath_WeChat")
-            wechatPath = p
-        }
-        pathError = nil
-        settingTarget = nil
-    }
 
     // v18: pickFolder 已删除（系统文件夹选择器不可用），外部恢复走分享扩展
 
@@ -644,7 +551,7 @@ struct UnzipDestView: View {
                         guard !p.isEmpty else { return }
                         // v29.1: 先校验——必须是 / 开头的真实路径，不能是文件App里显示的名字
                         guard p.hasPrefix("/") else {
-                            pathError = "这不是系统路径（别粘文件App里显示的名字）。用下面的“常用位置”→“选文件定位”，进 LiveContainer 随便选个文件即可。"
+                            pathError = "这不是系统路径（别粘文件App里显示的名字）。如需解压到 LiveContainer/微信，请用“捷径解压”。"
                             return
                         }
                         var isDir: ObjCBool = false
@@ -675,17 +582,6 @@ struct UnzipDestView: View {
                         Text(err).font(.footnote).foregroundColor(.red)
                     }
                     Text("从文件 App 复制文件夹路径后点“粘贴”。注意：其他 App 的沙盒目录可能无权限写入。")
-                        .font(.footnote).foregroundColor(.secondary)
-                }
-                // v29: 固定常用位置
-                Section(header: Text("常用位置")) {
-                    fixedPathRow(name: "我的iPhone ▸ LiveContainer", path: liveContainerPath, key: "live")
-                    fixedPathRow(name: "我的iPhone ▸ 微信", path: wechatPath, key: "wechat")
-                    // v30: 报错直接显示在这，用户看得见
-                    if let err = pathError, !err.isEmpty {
-                        Text(err).font(.footnote).foregroundColor(.red)
-                    }
-                    Text("点“选文件定位”，进对应位置随便选一个文件，自动记住目录。设置一次以后一键直达。")
                         .font(.footnote).foregroundColor(.secondary)
                 }
                 Section(header: Text("解压「\(zipURL?.lastPathComponent ?? "")」到…")) {
@@ -778,20 +674,29 @@ struct UnzipDestView: View {
     }
 }
 
-// MARK: - v29.1: 定位用文件选择器 delegate（只拿父目录路径）
-class LocatePickerDelegate: NSObject, UIDocumentPickerDelegate {
-    var onPick: ((URL) -> Void)?
-    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        if let u = urls.first { onPick?(u) }
-    }
-    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {}
-}
 
 // MARK: - v31: 捷径解压
 extension ContentView {
     func runUnzipShortcut(zipName: String) {
         let name = "备份助手解压".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let text = zipName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let urlStr = "shortcuts://run-shortcut?name=\(name)&input=text&text=\(text)"
+        if let url = URL(string: urlStr), UIApplication.shared.canOpenURL(url) {
+            UIApplication.shared.open(url)
+        } else {
+            alertText = "没找到“备份助手解压”快捷指令，先在捷径 App 里创建"
+            showAlert = true
+        }
+    }
+}
+
+// MARK: - v31: 捷径解压（带目的地：LiveContainer / 微信）
+extension ContentView {
+    func runUnzipShortcut(zipName: String, dest: String) {
+        let name = "备份助手解压".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        // 传 "文件名|目的地"，捷径里按 | 切分
+        let raw = "\(zipName)|\(dest)"
+        let text = raw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let urlStr = "shortcuts://run-shortcut?name=\(name)&input=text&text=\(text)"
         if let url = URL(string: urlStr), UIApplication.shared.canOpenURL(url) {
             UIApplication.shared.open(url)
@@ -850,6 +755,64 @@ struct ShortcutZipPicker: View {
                 }
             }
             .navigationTitle(title)
+            .navigationBarItems(trailing: Button("取消", action: onCancel))
+        }
+    }
+}
+
+// MARK: - v31: 捷径解压选 zip + 目的地
+struct ShortcutUnzipPicker: View {
+    let zips: [URL]
+    let onPick: (URL, String) -> Void
+    let onCancel: () -> Void
+    @State private var selectedZip: URL?
+    var body: some View {
+        NavigationView {
+            List {
+                if selectedZip == nil {
+                    Section(header: Text("第 1 步：选一个 zip")) {
+                        ForEach(zips, id: \.self) { url in
+                            Button {
+                                selectedZip = url
+                            } label: {
+                                HStack {
+                                    Image(systemName: "doc.zipper").foregroundColor(.orange)
+                                    Text(url.lastPathComponent).foregroundColor(.primary)
+                                    Spacer()
+                                    Image(systemName: "chevron.right").foregroundColor(.secondary).font(.footnote)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Section(header: Text("第 2 步：解压到哪里")) {
+                        Button {
+                            onPick(selectedZip!, "LiveContainer")
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder.fill").foregroundColor(.blue)
+                                Text("我的iPhone ▸ LiveContainer").foregroundColor(.primary).font(.headline)
+                                Spacer()
+                            }
+                        }
+                        Button {
+                            onPick(selectedZip!, "微信")
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder.fill").foregroundColor(.green)
+                                Text("我的iPhone ▸ 微信").foregroundColor(.primary).font(.headline)
+                                Spacer()
+                            }
+                        }
+                        Button("重选 zip") { selectedZip = nil }.font(.footnote)
+                    }
+                    Section {
+                        Text("需要“备份助手解压”快捷指令：接收文本 → 按 | 切出文件名和目的地 → 获取文件 → 解压缩 → 存到对应位置。")
+                            .font(.footnote).foregroundColor(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("捷径解压")
             .navigationBarItems(trailing: Button("取消", action: onCancel))
         }
     }
