@@ -35,6 +35,14 @@ targets:
           - Info.plist
           - "*.entitlements"
       - path: App/Sources/ZipHelper.swift
+      # v25: 纯 Swift Deflate 解码器（SWCompression，MIT）
+      - path: App/Sources/Deflate.swift
+      - path: App/Sources/Deflate+Constants.swift
+      - path: App/Sources/Deflate+Lengths.swift
+      - path: App/Sources/DeflateError.swift
+      - path: App/Sources/DecompressionAlgorithm.swift
+      - path: App/Sources/BitReader.swift
+      - path: App/Sources/LsbBitReader.swift
     entitlements:
       path: App/ShareExtension/ShareExtension.entitlements
     settings:
