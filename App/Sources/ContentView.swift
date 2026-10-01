@@ -93,6 +93,8 @@ struct ContentView: View {
     @State private var unzipCancelled = false
     // v30: 捷径备份选 zip
     @State private var showShortcutPicker = false
+    // v31: 捷径解压缩选 zip
+    @State private var showShortcutUnzipPicker = false
     @StateObject private var manager = BackupManager()
 
     // 恢复
@@ -186,6 +188,17 @@ struct ContentView: View {
                     Text("点上面选个 zip，再选解压到哪个文件夹。选择器里点“浏览”可进 iCloud 云盘。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
+                    // v31: 捷径解压（系统权限，可写 LiveContainer/微信）
+                    Button {
+                        showShortcutUnzipPicker = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "bolt.fill").foregroundColor(.orange)
+                            Text("捷径解压到 LiveContainer/微信").foregroundColor(.primary).font(.headline)
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundColor(.secondary).font(.footnote)
+                        }
+                    }
 
                     if backupZips.isEmpty {
                         Text("还没有选过 zip，点上面“选择 zip 文件”")
@@ -230,6 +243,13 @@ struct ContentView: View {
                         showShortcutPicker = false
                         runBackupShortcut(zipName: url.lastPathComponent)
                     }, onCancel: { showShortcutPicker = false })
+                }
+                // v31: 捷径解压选 zip
+                .sheet(isPresented: $showShortcutUnzipPicker) {
+                    ShortcutZipPicker(zips: backupZips, title: "选一个 zip 用捷径解压", onPick: { url in
+                        showShortcutUnzipPicker = false
+                        runUnzipShortcut(zipName: url.lastPathComponent)
+                    }, onCancel: { showShortcutUnzipPicker = false })
                 }
 
                 // MARK: 记录
@@ -767,6 +787,21 @@ class LocatePickerDelegate: NSObject, UIDocumentPickerDelegate {
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {}
 }
 
+// MARK: - v31: 捷径解压
+extension ContentView {
+    func runUnzipShortcut(zipName: String) {
+        let name = "备份助手解压".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let text = zipName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let urlStr = "shortcuts://run-shortcut?name=\(name)&input=text&text=\(text)"
+        if let url = URL(string: urlStr), UIApplication.shared.canOpenURL(url) {
+            UIApplication.shared.open(url)
+        } else {
+            alertText = "没找到“备份助手解压”快捷指令，先在捷径 App 里创建"
+            showAlert = true
+        }
+    }
+}
+
 // MARK: - v30: 捷径一键备份
 extension ContentView {
     func runBackupShortcut(zipName: String) {
@@ -788,12 +823,14 @@ extension ContentView {
 // v30: 选要备份的 zip
 struct ShortcutZipPicker: View {
     let zips: [URL]
+    var title = "一键备份到 iCloud"
+    var headerText = "选一个 zip 一键备份到 iCloud 云盘 ▸ Shortcuts"
     let onPick: (URL) -> Void
     let onCancel: () -> Void
     var body: some View {
         NavigationView {
             List {
-                Section(header: Text("选一个 zip 一键备份到 iCloud 云盘 ▸ Shortcuts")) {
+                Section(header: Text(headerText)) {
                     ForEach(zips, id: \.self) { url in
                         Button {
                             onPick(url)
@@ -812,7 +849,7 @@ struct ShortcutZipPicker: View {
                         .font(.footnote).foregroundColor(.secondary)
                 }
             }
-            .navigationTitle("一键备份到 iCloud")
+            .navigationTitle(title)
             .navigationBarItems(trailing: Button("取消", action: onCancel))
         }
     }
