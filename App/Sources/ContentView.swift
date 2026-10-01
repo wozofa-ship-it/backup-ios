@@ -1,5 +1,15 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
+
+// v12: 文件选择器（老式 API + 强持有 delegate）
+class ZipPickerDelegate: NSObject, UIDocumentPickerDelegate {
+    var onPick: ((URL) -> Void)?
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        if let url = urls.first { onPick?(url) }
+    }
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {}
+}
 
 func documentsDir() -> URL {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -83,6 +93,8 @@ struct ContentView: View {
 
     @State private var alertText = ""
     @State private var showAlert = false
+    // v12: 选择器强持有（防止 delegate 被释放导致无回调）
+    @State private var zipPickerDelegate: ZipPickerDelegate?
 
 
     var body: some View {
@@ -100,12 +112,24 @@ struct ContentView: View {
                 // MARK: 恢复（解压 zip）
                 // v10: 只留一句话说明，不再放导入按钮（按钮跳文件App后用户直接在那点zip，系统就地解压）
                 Section(header: Text("恢复")) {
-                    Text("把 zip 放进“备份助手”文件夹（在文件 App 里复制），回到这里点它，再选解压到哪个文件夹。")
+                    // v12: 直接选 zip 文件，不用先复制
+                    Button {
+                        pickZipFile()
+                    } label: {
+                        HStack {
+                            Image(systemName: "folder.badge.plus").foregroundColor(.blue)
+                            Text("选择 zip 文件").foregroundColor(.primary).font(.headline)
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundColor(.secondary).font(.footnote)
+                        }
+                    }
+
+                    Text("点上面选个 zip，再选解压到哪个文件夹。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
 
                     if backupZips.isEmpty {
-                        Text("暂无 zip：先去文件 App 把 zip 拷进“备份助手”文件夹")
+                        Text("还没有选过 zip，点上面“选择 zip 文件”")
                             .font(.footnote).foregroundColor(.secondary)
                     } else {
                         ForEach(backupZips, id: \.path) { url in
@@ -180,7 +204,7 @@ struct ContentView: View {
 
                 // v10: 版本号
                 Section {
-                    Text("版本 v11").font(.caption).foregroundColor(.secondary)
+                    Text("版本 v12").font(.caption).foregroundColor(.secondary)
                 }
             }
             .navigationTitle("备份助手")
@@ -238,6 +262,45 @@ struct ContentView: View {
     func openFilesApp() {
         if let url = URL(string: "shareddocuments://") {
             UIApplication.shared.open(url, options: [:], completionHandler: nil)
+        }
+    }
+
+    // v12: 老式 API 选择 zip（单选），delegate 强持有
+    func pickZipFile() {
+        let delegate = ZipPickerDelegate()
+        // 先拷到本机 Documents，选完直接进解压目标选择
+        delegate.onPick = { url in
+            let needStop = url.startAccessingSecurityScopedResource()
+            defer { if needStop { url.stopAccessingSecurityScopedResource() } }
+            let dest = documentsDir().appendingPathComponent(url.lastPathComponent)
+            try? FileManager.default.removeItem(at: dest)
+            do {
+                try FileManager.default.copyItem(at: url, to: dest)
+                DispatchQueue.main.async {
+                    self.refresh()
+                    self.selectedZip = dest
+                    self.showUnzipDestPicker = true
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.alertText = "读取失败：\(error.localizedDescription)"
+                    self.showAlert = true
+                }
+            }
+        }
+        zipPickerDelegate = delegate
+        // 老式初始化方法，兼容性最好
+        let picker = UIDocumentPickerViewController(documentTypes: ["public.zip-archive", "com.pkware.zip-archive"], in: .import)
+        picker.delegate = delegate
+        picker.allowsMultipleSelection = false
+        picker.modalPresentationStyle = .formSheet
+        if let root = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow })?.rootViewController {
+            var top = root
+            while let p = top.presentedViewController { top = p }
+            top.present(picker, animated: true)
         }
     }
 
