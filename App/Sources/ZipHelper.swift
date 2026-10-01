@@ -262,7 +262,7 @@ private func streamInflateToFile(fh: FileHandle, compSize: Int, outURL: URL) thr
         chunk.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) in
             stream.src_ptr = ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)
             stream.src_size = chunk.count
-            var flags: Int32 = 0
+            var flags = compression_stream_flags()
             // 最后一块数据（含补的尾）给 FINALIZE 标志
             if isLast { flags = COMPRESSION_STREAM_FINALIZE }
             repeat {
