@@ -54,6 +54,12 @@ class URLActionHandler: ObservableObject {
             return "找不到「\(name)」，请先用快捷指令「存储文件」存到备份助手目录"
         }
 
+        // 诊断：列出实际看到的内容
+        let contents = (try? fm.contentsOfDirectory(atPath: src.path)) ?? []
+        if contents.isEmpty {
+            return "打包失败：「\(name)」在App里看是空的（文件App里有\(name)/Application？可能是存的位置不对，请确认存到「我的iPhone→备份助手→\(name)」）"
+        }
+
         let backupDir = docs.appendingPathComponent("备份", isDirectory: true)
         try? fm.createDirectory(at: backupDir, withIntermediateDirectories: true)
 
@@ -66,7 +72,7 @@ class URLActionHandler: ObservableObject {
             try zipDirectory(at: src, to: zipURL)
             return "已打包：\(zipName)"
         } catch {
-            return "打包失败：\(error.localizedDescription)"
+            return "打包失败：\(error.localizedDescription)（看到\(contents.count)项：\(contents.prefix(3).joined(separator: "、"))）"
         }
     }
 
