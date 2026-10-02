@@ -25,8 +25,11 @@ class URLActionHandler: ObservableObject {
         guard url.scheme == "backupapp" else { return }
 
         if url.host == "zip" {
-            let name = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?.first(where: { $0.name == "name" })?.value?
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+            let name = items?.first(where: { $0.name == "name" })?.value?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // as= 指定 zip 文件名（不含日期后缀），不填就用文件夹名
+            let asName = items?.first(where: { $0.name == "as" })?.value?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
             if name.isEmpty {
@@ -36,7 +39,7 @@ class URLActionHandler: ObservableObject {
 
             // 后台压缩，完成后弹窗提示
             DispatchQueue.global(qos: .userInitiated).async {
-                let result = self.zipFolder(named: name)
+                let result = self.zipFolder(named: name, asName: asName.isEmpty ? nil : asName)
                 DispatchQueue.main.async {
                     self.show(result)
                 }
@@ -44,7 +47,7 @@ class URLActionHandler: ObservableObject {
         }
     }
 
-    private func zipFolder(named name: String) -> String {
+    private func zipFolder(named name: String, asName: String? = nil) -> String {
         let fm = FileManager.default
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let src = docs.appendingPathComponent(name, isDirectory: true)
@@ -70,11 +73,15 @@ class URLActionHandler: ObservableObject {
 
         let df = DateFormatter()
         df.dateFormat = "MMdd-HHmm"
-        let zipName = "\(name)-\(df.string(from: Date())).zip"
+        let baseName = asName ?? name
+        let zipName = "\(baseName)-\(df.string(from: Date())).zip"
         let zipURL = backupDir.appendingPathComponent(zipName)
 
         do {
             try zipDirectory(at: src, to: zipURL)
+            // 压完清空待打包，下次直接用
+            try? fm.removeItem(at: src)
+            try? fm.createDirectory(at: src, withIntermediateDirectories: true)
             return "已打包：\(zipName)"
         } catch {
             return "打包失败：\(error.localizedDescription)（看到\(contents.count)项：\(contents.prefix(3).joined(separator: "、"))）"
