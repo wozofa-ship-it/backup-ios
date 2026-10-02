@@ -1,17 +1,19 @@
 import AppIntents
 import Foundation
+import UniformTypeIdentifiers
 
-// v37: 压缩成 Zip —— 暴露给捷径 App 的动作
-// 把备份助手 Documents 目录里的指定文件夹/文件打成 zip，存到备份目录
+// v38: 压缩成 Zip —— 接收快捷指令传进来的文件/文件夹（沙盒外也可），复制到 App 内再打 zip
 // 快捷指令里直接搜"压缩"就能找到，当普通命令用
 
 enum CompressError: Error, LocalizedError {
-    case notFound(String)
+    case noInput
+    case copyFailed(String)
     case zipFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .notFound(let n): return "找不到：\(n)"
+        case .noInput: return "没有收到文件，请在快捷指令里先用「获取文件」选中再传入"
+        case .copyFailed(let s): return "复制文件失败：\(s)"
         case .zipFailed(let s): return "压缩失败：\(s)"
         }
     }
@@ -19,30 +21,63 @@ enum CompressError: Error, LocalizedError {
 
 struct CompressFilesIntent: AppIntent {
     static var title: LocalizedStringResource = "压缩成 Zip"
-    static var description = IntentDescription("把备份助手目录里的文件夹或文件打成 zip 包")
+    static var description = IntentDescription("把传入的文件或文件夹打成 zip 包")
 
-    @Parameter(title: "名称", description: "Documents 目录里的文件夹或文件名")
-    var name: String
+    @Parameter(title: "文件", description: "要压缩的文件或文件夹（从快捷指令传入）",
+               supportedContentTypes: [.folder, .data])
+    var file: IntentFile?
+
+    @Parameter(title: "名称", description: "已在备份助手目录里的文件/文件夹名（老用法，不传文件时用）")
+    var name: String?
 
     @Parameter(title: "输出文件名", description: "zip 包名，不填则自动生成（可省略）")
     var outputName: String?
 
     static var parameterSummary: some ParameterSummary {
-        Summary("压缩 \(\.$name) 成 Zip")
+        Summary("压缩 \(\.$file) 成 Zip") {
+            \.$name
+        }
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
         let fm = FileManager.default
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let src = docs.appendingPathComponent(name)
-
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: src.path, isDirectory: &isDir) else {
-            throw CompressError.notFound(name)
-        }
-
         let backupDir = docs.appendingPathComponent("备份", isDirectory: true)
         try? fm.createDirectory(at: backupDir, withIntermediateDirectories: true)
+
+        // 确定源：优先用传入的文件
+        var src: URL
+        var srcIsDir = false
+        if let inputFile = file, let url = inputFile.fileURL {
+            src = url
+            var isDir: ObjCBool = false
+            let accessing = src.startAccessingSecurityScopedResource()
+            defer { if accessing { src.stopAccessingSecurityScopedResource() } }
+            guard fm.fileExists(atPath: src.path, isDirectory: &isDir) else {
+                throw CompressError.noInput
+            }
+            srcIsDir = isDir.boolValue
+            // 复制到沙盒内再压
+            let tmp = fm.temporaryDirectory.appendingPathComponent("compress-\(UUID().uuidString)", isDirectory: true)
+            try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+            let staged = tmp.appendingPathComponent(src.lastPathComponent)
+            do {
+                try fm.copyItem(at: src, to: staged)
+            } catch {
+                throw CompressError.copyFailed(error.localizedDescription)
+            }
+            src = staged
+        } else if let n = name?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty {
+            let candidate = docs.appendingPathComponent(n)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: candidate.path, isDirectory: &isDir) else {
+                throw CompressError.copyFailed("找不到：\(n)")
+            }
+            src = candidate
+            srcIsDir = isDir.boolValue
+        } else {
+            throw CompressError.noInput
+        }
 
         let zipBase: String
         if let out = outputName?.trimmingCharacters(in: .whitespacesAndNewlines), !out.isEmpty {
@@ -55,10 +90,9 @@ struct CompressFilesIntent: AppIntent {
         let zipURL = backupDir.appendingPathComponent(zipBase)
 
         do {
-            if isDir.boolValue {
+            if srcIsDir {
                 try zipDirectory(at: src, to: zipURL)
             } else {
-                // 单个文件：建临时目录装进去再压，保证 zip 内结构干净
                 let tmp = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
                 try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
                 try fm.copyItem(at: src, to: tmp.appendingPathComponent(src.lastPathComponent))
@@ -67,6 +101,10 @@ struct CompressFilesIntent: AppIntent {
             }
         } catch {
             throw CompressError.zipFailed(error.localizedDescription)
+        }
+        // 清理 staging（如果是从外部复制进来的）
+        if src.path.contains(fm.temporaryDirectory.path) {
+            try? fm.removeItem(at: src.deletingLastPathComponent())
         }
 
         return .result(value: "已压缩：\(zipBase)")
