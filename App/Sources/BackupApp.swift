@@ -54,10 +54,15 @@ class URLActionHandler: ObservableObject {
             return "找不到「\(name)」，请先用快捷指令「存储文件」存到备份助手目录"
         }
 
-        // 诊断：列出实际看到的内容
-        let contents = (try? fm.contentsOfDirectory(atPath: src.path)) ?? []
+        // 等待文件写完：最多等30秒，每2秒查一次
+        var contents: [String] = []
+        for _ in 0..<15 {
+            contents = (try? fm.contentsOfDirectory(atPath: src.path)) ?? []
+            if !contents.isEmpty { break }
+            Thread.sleep(forTimeInterval: 2)
+        }
         if contents.isEmpty {
-            return "打包失败：「\(name)」在App里看是空的（文件App里有\(name)/Application？可能是存的位置不对，请确认存到「我的iPhone→备份助手→\(name)」）"
+            return "打包失败：「\(name)」在App里看是空的（等了30秒还是空，请确认快捷指令「存储文件」的目的地是「我的iPhone→备份助手→\(name)」）"
         }
 
         let backupDir = docs.appendingPathComponent("备份", isDirectory: true)
