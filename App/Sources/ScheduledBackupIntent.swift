@@ -23,9 +23,8 @@ struct ScheduledBackupIntent: AppIntent {
     static var title: LocalizedStringResource = "定时备份文件夹"
     static var description = IntentDescription("把传入的文件夹打成 zip，存到备份目录")
 
-    @Parameter(title: "文件夹", description: "要备份的文件夹（从快捷指令传入）",
-               supportedContentTypes: [.folder])
-    var folder: IntentFile?
+    @Parameter(title: "文件夹", description: "要备份的文件夹（从快捷指令传入）")
+    var folder: URL?
 
     @Parameter(title: "文件夹名称", description: "已在备份助手目录里的文件夹名（老用法，不传文件时用）")
     var folderName: String?
@@ -45,10 +44,15 @@ struct ScheduledBackupIntent: AppIntent {
         let df = DateFormatter()
         df.dateFormat = "MMdd-HHmm"
 
-        // 模式1：收到了快捷指令传进来的文件
-        if let inputFile = folder, let src = inputFile.fileURL {
+        // 模式1：收到了快捷指令传进来的文件/文件夹 URL
+        if let src = folder {
             let accessing = src.startAccessingSecurityScopedResource()
             defer { if accessing { src.stopAccessingSecurityScopedResource() } }
+
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: src.path, isDirectory: &isDir) else {
+                throw ScheduledBackupError.noInput
+            }
 
             // 复制到 App 沙盒内的临时目录再压缩（避免跨沙盒直接读大文件）
             let tmp = fm.temporaryDirectory.appendingPathComponent("backup-\(UUID().uuidString)", isDirectory: true)
