@@ -80,8 +80,12 @@ class URLActionHandler: ObservableObject {
         do {
             try zipDirectory(at: src, to: zipURL)
             // 压完清空待打包，下次直接用
-            try? fm.removeItem(at: src)
-            try? fm.createDirectory(at: src, withIntermediateDirectories: true)
+            do {
+                try fm.removeItem(at: src)
+                try fm.createDirectory(at: src, withIntermediateDirectories: true)
+            } catch {
+                return "已打包：\(zipName)，但清空待打包失败：\(error.localizedDescription)，请手动删"
+            }
             return "已打包：\(zipName)"
         } catch {
             return "打包失败：\(error.localizedDescription)（看到\(contents.count)项：\(contents.prefix(3).joined(separator: "、"))）"
