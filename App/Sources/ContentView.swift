@@ -14,6 +14,31 @@ class ZipPickerDelegate: NSObject, UIDocumentPickerDelegate {
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {}
 }
 
+// v45: 文件夹绑定选择器（选外部文件夹，存 security-scoped bookmark）
+class FolderBindDelegate: NSObject, UIDocumentPickerDelegate {
+    var onPick: ((URL) -> Void)?
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        if let url = urls.first { onPick?(url) }
+    }
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {}
+}
+
+// v45: 绑定的源文件夹管理
+func boundFoldersKey() -> String { "v45_boundFolders" }
+func loadBoundFolders() -> [String: String] {
+    UserDefaults.standard.dictionary(forKey: boundFoldersKey()) as? [String: String] ?? [:]
+}
+func saveBoundFolders(_ dict: [String: String]) {
+    UserDefaults.standard.set(dict, forKey: boundFoldersKey())
+}
+func resolveBoundFolder(bookmarkB64: String) -> URL? {
+    guard let data = Data(base64Encoded: bookmarkB64) else { return nil }
+    var stale = false
+    guard let url = try? URL(resolvingBookmarkData: data, options: .withoutUI,
+                             relativeTo: nil, bookmarkDataIsStale: &stale) else { return nil }
+    return url
+}
+
 func documentsDir() -> URL {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 }
@@ -107,6 +132,10 @@ struct ContentView: View {
     @State private var showAlert = false
     // v12: 选择器强持有（防止 delegate 被释放导致无回调）
     @State private var zipPickerDelegate: ZipPickerDelegate?
+    // v45: 绑定的源文件夹（security-scoped bookmark）
+    @State private var boundFolders: [String: String] = [:]  // 名称 -> bookmark base64
+    @State private var showFolderBinder = false
+    @State private var binderDelegate: FolderBindDelegate?
 
 
     // v34: 可定时备份的文件夹（Documents 下除"备份"外的子文件夹）
@@ -177,6 +206,64 @@ struct ContentView: View {
                 }
 
                 // MARK: v34 定时备份（捷径自动化调用 App 动作）
+                // v45: 自动备份（绑定源文件夹，一步到位）
+                Section(header: Text("自动备份")) {
+                    Text("点下面绑定要备份的文件夹（如 LiveContainer 的 Data），之后快捷指令只需「打开 URL」，App 直接压缩，不用先复制。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    Button("＋ 绑定源文件夹") {
+                        let delegate = FolderBindDelegate()
+                        delegate.onPick = { url in
+                            // 存 bookmark
+                            guard url.startAccessingSecurityScopedResource() else {
+                                alertText = "无法访问该文件夹"
+                                showAlert = true
+                                return
+                            }
+                            defer { url.stopAccessingSecurityScopedResource() }
+                            if let data = try? url.bookmarkData(options: .minimalBookmark,
+                                                               includingResourceValuesForKeys: nil,
+                                                               relativeTo: nil) {
+                                var dict = loadBoundFolders()
+                                let name = url.lastPathComponent
+                                dict[name] = data.base64EncodedString()
+                                saveBoundFolders(dict)
+                                boundFolders = dict
+                                alertText = "已绑定「\(name)」"
+                                showAlert = true
+                            }
+                        }
+                        binderDelegate = delegate
+                        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
+                        picker.delegate = delegate
+                        picker.allowsMultipleSelection = false
+                        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                           let root = scene.windows.first?.rootViewController {
+                            root.present(picker, animated: true)
+                        }
+                    }
+                    ForEach(Array(boundFolders.keys.sorted()), id: \.self) { name in
+                        HStack {
+                            Image(systemName: "folder.badge.checkmark").foregroundColor(.green).font(.footnote)
+                            VStack(alignment: .leading) {
+                                Text(name).font(.footnote)
+                                Text("backupapp://zip?src=\(name)&as=\(name)")
+                                    .font(.caption2).foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Button("复制URL") {
+                                UIPasteboard.general.string = "backupapp://zip?src=\(name)&as=\(name)"
+                            }.font(.footnote)
+                            Button("解绑") {
+                                var dict = loadBoundFolders()
+                                dict.removeValue(forKey: name)
+                                saveBoundFolders(dict)
+                                boundFolders = dict
+                            }.font(.footnote).foregroundColor(.red)
+                        }
+                    }
+                }
+
                 Section(header: Text("定时备份")) {
                     Text("去“捷径”App → 自动化 → 新建 → 到达时间（选每周/每月）→ 运行“备份助手”的“定时备份文件夹”动作，填下面要备份的文件夹名。到点自动打 zip 存到备份目录。")
                         .font(.footnote)
@@ -328,10 +415,12 @@ struct ContentView: View {
             .navigationTitle("备份助手")
             .onAppear {
                 refresh()
+                boundFolders = loadBoundFolders()
             }
             // v6.0：回到前台自动刷新
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 refresh()
+                boundFolders = loadBoundFolders()
             }
             .alert("提示", isPresented: $showAlert) { Button("好") {} } message: { Text(alertText) }
             // v44: URL Scheme 调用结果提示
