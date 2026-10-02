@@ -1,8 +1,8 @@
 import AppIntents
 import Foundation
 
-// v40: 压缩成 Zip —— 接收快捷指令"获取文件夹内容"传来的文件数组，原地打成 zip
-// 用法：获取 Data 的内容 → 压缩成 Zip（文件数组自动传入）
+// v41: 压缩成 Zip —— 接收快捷指令"获取文件夹内容"传来的文件数组
+// 修复 v40 错误2：fileURL 为空时改用 data 写入；加计数诊断
 
 enum CompressError: Error, LocalizedError {
     case noInput
@@ -40,24 +40,41 @@ struct CompressFilesIntent: AppIntent {
         let backupDir = docs.appendingPathComponent("备份", isDirectory: true)
         try? fm.createDirectory(at: backupDir, withIntermediateDirectories: true)
 
-        // 把传进来的文件全部拷到临时 staging 目录
         let staging = fm.temporaryDirectory.appendingPathComponent("zipin-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: staging, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: staging) }
 
+        var copied = 0
+        var skipped: [String] = []
         for f in files {
-            guard let src = f.fileURL else { continue }
-            let accessing = src.startAccessingSecurityScopedResource()
-            defer { if accessing { src.stopAccessingSecurityScopedResource() } }
-            let dest = staging.appendingPathComponent(src.lastPathComponent)
-            do {
-                if fm.fileExists(atPath: dest.path) {
-                    try fm.removeItem(at: dest)
+            let name = f.filename.isEmpty ? "未命名文件\(copied)" : f.filename
+            let dest = staging.appendingPathComponent(name)
+            // 通道1：fileURL 直接复制（大文件走这里，不占内存）
+            if let src = f.fileURL {
+                let accessing = src.startAccessingSecurityScopedResource()
+                defer { if accessing { src.stopAccessingSecurityScopedResource() } }
+                do {
+                    if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+                    try fm.copyItem(at: src, to: dest)
+                    copied += 1
+                    continue
+                } catch {
+                    // 复制失败则尝试通道2
                 }
-                try fm.copyItem(at: src, to: dest)
-            } catch {
-                throw CompressError.copyFailed("\(src.lastPathComponent): \(error.localizedDescription)")
             }
+            // 通道2：用 data 写入（小文件兜底）
+            do {
+                let data = try f.data
+                if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+                try data.write(to: dest)
+                copied += 1
+            } catch {
+                skipped.append(name)
+            }
+        }
+
+        guard copied > 0 else {
+            throw CompressError.copyFailed("收到 \(files.count) 个文件，但一个都没能读取（跳过：\(skipped.joined(separator: "、"))）")
         }
 
         let zipBase: String
@@ -76,6 +93,9 @@ struct CompressFilesIntent: AppIntent {
             throw CompressError.zipFailed(error.localizedDescription)
         }
 
-        return .result(value: "已压缩：\(zipBase)")
+        let msg = skipped.isEmpty
+            ? "已压缩：\(zipBase)（\(copied) 个文件）"
+            : "已压缩：\(zipBase)（\(copied) 个文件，跳过 \(skipped.count) 个）"
+        return .result(value: msg)
     }
 }
