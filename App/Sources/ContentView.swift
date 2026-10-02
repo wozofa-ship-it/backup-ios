@@ -87,6 +87,7 @@ func topVC() -> UIViewController? {
 // 点"打开"均无响应，delegate 不触发）。改走"文件App分享到备份助手"扩展导入，不再保留诊断代码。
 
 struct ContentView: View {
+    @EnvironmentObject private var urlHandler: URLActionHandler
     // v27: 备份到 iCloud 分享表
     @State private var showICloudShare = false
     // v28: 解压取消
@@ -333,6 +334,8 @@ struct ContentView: View {
                 refresh()
             }
             .alert("提示", isPresented: $showAlert) { Button("好") {} } message: { Text(alertText) }
+            // v44: URL Scheme 调用结果提示
+            .alert("打包结果", isPresented: $urlHandler.showResult) { Button("好") {} } message: { Text(urlHandler.lastResult) }
         }
     }
 
