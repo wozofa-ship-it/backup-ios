@@ -24,6 +24,7 @@ targets:
       INFOPLIST_KEY_CFBundleDisplayName: "备份助手"
       INFOPLIST_KEY_UIFileSharingEnabled: "YES"
       INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: "YES"
+      INFOPLIST_KEY_CFBUNDLEURLTypes: "[{CFBundleURLName: com.quseqi.backup.url, CFBundleURLSchemes: [backupapp]}]"
 
   # v8.0：分享扩展，打zip后直接调系统分享存iCloud，不依赖App Group
   ShareExtension:
