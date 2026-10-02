@@ -71,11 +71,11 @@ class URLActionHandler: ObservableObject {
         let backupDir = docs.appendingPathComponent("备份", isDirectory: true)
         try? fm.createDirectory(at: backupDir, withIntermediateDirectories: true)
 
-        let df = DateFormatter()
-        df.dateFormat = "MMdd-HHmm"
         let baseName = asName ?? name
-        let zipName = "\(baseName)-\(df.string(from: Date())).zip"
+        let zipName = "\(baseName).zip"
         let zipURL = backupDir.appendingPathComponent(zipName)
+        // 同名直接覆盖
+        try? FileManager.default.removeItem(at: zipURL)
 
         do {
             try zipDirectory(at: src, to: zipURL)
