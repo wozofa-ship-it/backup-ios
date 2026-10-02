@@ -107,6 +107,14 @@ struct ContentView: View {
     // v12: 选择器强持有（防止 delegate 被释放导致无回调）
     @State private var zipPickerDelegate: ZipPickerDelegate?
 
+    // v35: iCloud 备份指定文件夹
+    @State private var iCloudBackingUp = false
+    // v35: 移动文件
+    @State private var moveSource: URL?
+    @State private var moveDest: URL?
+    @State private var showNewFolderAlert = false
+    @State private var newFolderName = ""
+
     // v34: 可定时备份的文件夹（Documents 下除"备份"外的子文件夹）
     var schedulableFolders: [URL] {
         listFolders(in: documentsDir(), excluding: ["备份"])
@@ -192,6 +200,108 @@ struct ContentView: View {
                     if schedulableFolders.isEmpty {
                         Text("备份助手目录里还没有文件夹。")
                             .font(.footnote).foregroundColor(.secondary)
+                    }
+                }
+
+                // MARK: v35 iCloud 备份指定文件夹
+                Section(header: Text("iCloud 备份文件夹")) {
+                    Text("选一个文件夹，打包成 zip 后一键存到 iCloud 云盘 ▸ Shortcuts。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    ForEach(schedulableFolders, id: \.lastPathComponent) { folder in
+                        HStack {
+                            Image(systemName: "folder").foregroundColor(.blue).font(.footnote)
+                            Text(folder.lastPathComponent).font(.footnote)
+                            Spacer()
+                            Button {
+                                backupFolderToICloud(folder)
+                            } label: {
+                                HStack {
+                                    Image(systemName: "icloud.and.arrow.up")
+                                    Text("备份到 iCloud")
+                                }.font(.footnote)
+                            }
+                            .disabled(iCloudBackingUp)
+                        }
+                    }
+                    if schedulableFolders.isEmpty {
+                        Text("备份助手目录里还没有文件夹。")
+                            .font(.footnote).foregroundColor(.secondary)
+                    }
+                    if iCloudBackingUp {
+                        HStack {
+                            ProgressView().scaleEffect(0.8)
+                            Text("正在打包…").font(.footnote).foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                // MARK: v35 移动文件到指定文件夹
+                Section(header: Text("移动文件")) {
+                    Text("把文件或文件夹移动到指定位置。先选要移动的，再选目标文件夹。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    // 源选择
+                    Text("1. 要移动的").font(.footnote).foregroundColor(.secondary)
+                    ForEach(moveableItems, id: \.lastPathComponent) { item in
+                        Button {
+                            moveSource = item
+                        } label: {
+                            HStack {
+                                Image(systemName: isDirectory(item) ? "folder" : "doc")
+                                    .foregroundColor(.blue).font(.footnote)
+                                Text(item.lastPathComponent).font(.footnote)
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                if moveSource?.lastPathComponent == item.lastPathComponent {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.blue).font(.footnote)
+                                }
+                            }
+                        }
+                    }
+                    // 目标选择
+                    Text("2. 移动到").font(.footnote).foregroundColor(.secondary)
+                    ForEach(moveDestFolders, id: \.lastPathComponent) { folder in
+                        Button {
+                            moveDest = folder
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder").foregroundColor(.green).font(.footnote)
+                                Text(folder.lastPathComponent).font(.footnote)
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                if moveDest?.lastPathComponent == folder.lastPathComponent {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green).font(.footnote)
+                                }
+                            }
+                        }
+                    }
+                    HStack {
+                        Button {
+                            showNewFolderAlert = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder.badge.plus")
+                                Text("新建文件夹")
+                            }.font(.footnote)
+                        }
+                        Spacer()
+                        Button {
+                            executeMove()
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.right.circle.fill")
+                                Text("执行移动")
+                            }.font(.headline)
+                        }
+                        .disabled(moveSource == nil || moveDest == nil)
+                    }
+                    .alert("新建文件夹", isPresented: $showNewFolderAlert) {
+                        TextField("文件夹名称", text: $newFolderName)
+                        Button("取消", role: .cancel) { newFolderName = "" }
+                        Button("创建") { createMoveDestFolder() }
                     }
                 }
 
@@ -693,6 +803,114 @@ extension ContentView {
             UIApplication.shared.open(url)
         } else {
             alertText = "没找到“\(shortcutName)”快捷指令，先在捷径 App 里创建"
+            showAlert = true
+        }
+    }
+}
+
+// MARK: - v35: iCloud 备份指定文件夹 + 移动文件
+extension ContentView {
+    /// 可移动的项：Documents 下的文件和文件夹（排除"备份"）
+    var moveableItems: [URL] {
+        let fm = FileManager.default
+        let docs = documentsDir()
+        guard let items = try? fm.contentsOfDirectory(at: docs, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+            return []
+        }
+        return items.filter { $0.lastPathComponent != "备份" }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+    }
+
+    /// 移动目标文件夹：Documents 下的文件夹（排除"备份"）
+    var moveDestFolders: [URL] {
+        listFolders(in: documentsDir(), excluding: ["备份"])
+    }
+
+    func isDirectory(_ url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        return isDir.boolValue
+    }
+
+    /// v35: 把指定文件夹打成 zip，然后调"备份助手存iCloud"快捷指令存到 iCloud
+    func backupFolderToICloud(_ folder: URL) {
+        iCloudBackingUp = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fm = FileManager.default
+            let docs = documentsDir()
+            let backupDir = docs.appendingPathComponent("备份", isDirectory: true)
+            try? fm.createDirectory(at: backupDir, withIntermediateDirectories: true)
+            let df = DateFormatter()
+            df.dateFormat = "MMdd-HHmm"
+            let zipName = "\(folder.lastPathComponent)-\(df.string(from: Date())).zip"
+            let zipURL = backupDir.appendingPathComponent(zipName)
+            do {
+                try zipDirectory(at: folder, to: zipURL)
+                DispatchQueue.main.async {
+                    iCloudBackingUp = false
+                    refresh()
+                    // 打包成功，直接调快捷指令存 iCloud
+                    runBackupShortcut(zipName: zipName)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    iCloudBackingUp = false
+                    alertText = "打包失败：\(error.localizedDescription)"
+                    showAlert = true
+                }
+            }
+        }
+    }
+
+    /// v35: 执行移动
+    func executeMove() {
+        guard let src = moveSource, let destFolder = moveDest else { return }
+        // 不能移动到自己里面
+        if isDirectory(src) && destFolder.path.hasPrefix(src.path) {
+            alertText = "不能把文件夹移动到自己里面"
+            showAlert = true
+            return
+        }
+        let fm = FileManager.default
+        var dest = destFolder.appendingPathComponent(src.lastPathComponent)
+        // 同名自动加后缀
+        var n = 2
+        while fm.fileExists(atPath: dest.path) {
+            let base = src.deletingPathExtension().lastPathComponent
+            let ext = src.pathExtension
+            let name = ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)"
+            dest = destFolder.appendingPathComponent(name)
+            n += 1
+        }
+        do {
+            try fm.moveItem(at: src, to: dest)
+            alertText = "已移动到“\(destFolder.lastPathComponent)”"
+            showAlert = true
+            moveSource = nil
+            // moveDest 保留，方便连续移动
+        } catch {
+            alertText = "移动失败：\(error.localizedDescription)"
+            showAlert = true
+        }
+    }
+
+    /// v35: 在 Documents 下新建目标文件夹
+    func createMoveDestFolder() {
+        let name = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        newFolderName = ""
+        guard !name.isEmpty else { return }
+        let fm = FileManager.default
+        let dest = documentsDir().appendingPathComponent(name, isDirectory: true)
+        if fm.fileExists(atPath: dest.path) {
+            alertText = "已存在同名文件夹"
+            showAlert = true
+            return
+        }
+        do {
+            try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+            moveDest = dest
+        } catch {
+            alertText = "创建失败：\(error.localizedDescription)"
             showAlert = true
         }
     }
