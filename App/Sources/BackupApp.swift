@@ -28,66 +28,22 @@ class URLActionHandler: ObservableObject {
             let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
             let name = items?.first(where: { $0.name == "name" })?.value?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            // v45: src= 绑定的源文件夹名，直接从原位置压缩，不用先复制
-            let srcName = items?.first(where: { $0.name == "src" })?.value?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            // as= 指定 zip 文件名（不含日期后缀），不填就用文件夹名
+            // as= 指定 zip 文件名，不填就用文件夹名
             let asName = items?.first(where: { $0.name == "as" })?.value?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
+            if name.isEmpty {
+                show("请指定文件夹名：backupapp://zip?name=文件夹名")
+                return
+            }
+
             // 后台压缩，完成后弹窗提示
             DispatchQueue.global(qos: .userInitiated).async {
-                let result: String
-                if !srcName.isEmpty {
-                    result = self.zipBoundFolder(srcName: srcName, asName: asName.isEmpty ? nil : asName)
-                } else if !name.isEmpty {
-                    result = self.zipFolder(named: name, asName: asName.isEmpty ? nil : asName)
-                } else {
-                    result = "请指定文件夹：backupapp://zip?name=文件夹名 或 backupapp://zip?src=绑定名"
-                }
+                let result = self.zipFolder(named: name, asName: asName.isEmpty ? nil : asName)
                 DispatchQueue.main.async {
                     self.show(result)
                 }
             }
-        }
-    }
-
-    // v45: 压缩绑定的源文件夹（直接从原位置读，不用先复制）
-    private func zipBoundFolder(srcName: String, asName: String?) -> String {
-        let fm = FileManager.default
-        let dict = UserDefaults.standard.dictionary(forKey: "v45_boundFolders") as? [String: String] ?? [:]
-        guard let b64 = dict[srcName], let data = Data(base64Encoded: b64) else {
-            return "没绑定「\(srcName)」，请先在 App 里「自动备份」绑定"
-        }
-        var stale = false
-        guard let srcURL = try? URL(resolvingBookmarkData: data, options: .withoutUI,
-                                    relativeTo: nil, bookmarkDataIsStale: &stale) else {
-            return "绑定「\(srcName)」已失效，请重新绑定"
-        }
-        guard srcURL.startAccessingSecurityScopedResource() else {
-            return "无法访问「\(srcName)」"
-        }
-        defer { srcURL.stopAccessingSecurityScopedResource() }
-
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: srcURL.path, isDirectory: &isDir), isDir.boolValue else {
-            return "「\(srcName)」不存在或不是文件夹"
-        }
-
-        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let backupDir = docs.appendingPathComponent("备份", isDirectory: true)
-        try? fm.createDirectory(at: backupDir, withIntermediateDirectories: true)
-
-        let baseName = asName ?? srcName
-        let zipName = "\(baseName).zip"
-        let zipURL = backupDir.appendingPathComponent(zipName)
-        try? fm.removeItem(at: zipURL)
-
-        do {
-            try zipDirectory(at: srcURL, to: zipURL)
-            return "已打包：\(zipName)"
-        } catch {
-            return "打包失败：\(error.localizedDescription)"
         }
     }
 
