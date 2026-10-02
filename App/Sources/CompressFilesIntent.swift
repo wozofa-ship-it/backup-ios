@@ -23,9 +23,8 @@ struct CompressFilesIntent: AppIntent {
     static var title: LocalizedStringResource = "压缩成 Zip"
     static var description = IntentDescription("把传入的文件或文件夹打成 zip 包")
 
-    @Parameter(title: "文件", description: "要压缩的文件或文件夹（从快捷指令传入）",
-               supportedContentTypes: [.folder, .data])
-    var file: IntentFile?
+    @Parameter(title: "文件", description: "要压缩的文件或文件夹（从快捷指令传入）")
+    var file: URL?
 
     @Parameter(title: "名称", description: "已在备份助手目录里的文件/文件夹名（老用法，不传文件时用）")
     var name: String?
@@ -45,10 +44,10 @@ struct CompressFilesIntent: AppIntent {
         let backupDir = docs.appendingPathComponent("备份", isDirectory: true)
         try? fm.createDirectory(at: backupDir, withIntermediateDirectories: true)
 
-        // 确定源：优先用传入的文件
+        // 确定源：优先用传入的文件 URL
         var src: URL
         var srcIsDir = false
-        if let inputFile = file, let url = inputFile.fileURL {
+        if let url = file {
             src = url
             var isDir: ObjCBool = false
             let accessing = src.startAccessingSecurityScopedResource()
