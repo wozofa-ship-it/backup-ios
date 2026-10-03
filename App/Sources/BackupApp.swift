@@ -37,8 +37,8 @@ class URLActionHandler: ObservableObject {
                 return
             }
 
-            // 后台压缩，完成后弹窗提示
-            DispatchQueue.global(qos: .userInitiated).async {
+            // 后台压缩，完成后弹窗提示（用 utility 优先级，降低 CPU 占用和发热）
+            DispatchQueue.global(qos: .utility).async {
                 let result = self.zipFolder(named: name, asName: asName.isEmpty ? nil : asName)
                 DispatchQueue.main.async {
                     self.show(result)
